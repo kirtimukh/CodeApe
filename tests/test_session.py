@@ -34,7 +34,9 @@ def test_session_types_root_commit_and_replays(sample_repo, codeape_home):
     assert line.kind == "ADD"
 
     _type_line(session, "def hello():")
-    session.on_tab()
+    current = _current_line(session)
+    assert current.col == 4
+    assert current.typing[current.col :].startswith("return")
     _type_line(session, "return 1")
 
     assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
@@ -46,7 +48,9 @@ def test_session_types_root_commit_and_replays(sample_repo, codeape_home):
     current = _current_line(session)
     assert current.kind == "DEL"
     session.on_accept_del()
-    session.on_tab()
+    current = _current_line(session)
+    assert current.col == 4
+    assert current.typing[current.col :].startswith("return")
     _type_line(session, "return 2")
     # Comment-only and lockfile commits auto-complete after the mixed hunk.
     assert session.done
@@ -159,6 +163,64 @@ def test_navigate_only_typable_and_new_files(mixed_nav_repo, codeape_home):
     assert seen == {"hello.py", "util.py"}
 
 
+def test_persist_remembers_in_progress_typing(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    line = _current_line(session)
+    for ch in line.typing[:3]:
+        session.on_char(ch)
+    assert _current_line(session).col == 3
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    current = _current_line(resumed)
+    assert current.col == 3
+    assert current.typing[:3] == line.typing[:3]
+
+
+def test_persist_remembers_typing_across_files(import_added_repo, codeape_home):
+    session, paths = _open_session(import_added_repo)
+    session.skip_commit()
+
+    first_file = session.view().file
+    first_line = _current_line(session)
+    for ch in first_line.typing[:3]:
+        session.on_char(ch)
+    first_col = _current_line(session).col
+
+    session.next_file()
+    second_file = session.view().file
+    assert second_file != first_file
+    second_line = _current_line(session)
+    if second_line.kind == "ADD" and second_line.typing:
+        session.on_char(second_line.typing[0])
+    second_col = _current_line(session).col
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    assert resumed.view().file == second_file
+    assert _current_line(resumed).col == second_col
+    resumed.prev_file()
+    assert resumed.view().file == first_file
+    assert _current_line(resumed).col == first_col
+
+
+def test_persist_remembers_delete_remaining(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    _type_line(session, "def hello():")
+    _type_line(session, "return 1")
+    current = _current_line(session)
+    assert current.kind == "DEL"
+    session.on_backspace()
+    remaining = _current_line(session).remaining
+    assert remaining == len(current.display) - 1
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    restored = _current_line(resumed)
+    assert restored.kind == "DEL"
+    assert restored.remaining == remaining
+
+
 def test_progress_infers_done_hunks_from_old_hunk_index(tmp_path: Path):
     path = tmp_path / "progress.json"
     path.write_text(
@@ -174,3 +236,7 @@ def test_progress_infers_done_hunks_from_old_hunk_index(tmp_path: Path):
     )
     progress = Progress.load(path)
     assert progress.current.done_hunks == [0, 1, 2]
+    assert progress.current.line == 0
+    assert progress.current.col == 0
+    assert progress.current.remaining is None
+    assert progress.current.cursors == []

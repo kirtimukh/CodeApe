@@ -8,8 +8,8 @@ from codeape.comments import split_code_and_comment
 from codeape.diff_engine import Hunk, commit_hunks
 from codeape.history import commit_meta, file_at
 from codeape.paths import RepoPaths
-from codeape.progress import Current, Progress
-from codeape.tokens import tab_target
+from codeape.progress import Current, HunkCursor, Progress
+from codeape.tokens import leading_indent, tab_target
 
 
 @dataclass
@@ -131,10 +131,72 @@ class Session:
 
     def persist(self) -> None:
         self.progress.stats.time_ms = self.time_ms()
+        self._snapshot_typing()
         self.progress.save(self.paths.progress_file)
 
     def _save(self) -> None:
         self.persist()
+
+    def _line_offset(self, hunk_i: int, line_i: int) -> tuple[int, int | None]:
+        if not (0 <= hunk_i < len(self._prepared)):
+            return 0, None
+        lines = self._prepared[hunk_i].lines
+        if not (0 <= line_i < len(lines)):
+            return 0, None
+        line = lines[line_i]
+        if line.kind == "DEL":
+            return line.col, line.remaining
+        return line.col, None
+
+    def _snapshot_typing(self) -> None:
+        current = self.progress.current
+        if self.done or current.sha is None:
+            current.line = 0
+            current.col = 0
+            current.remaining = None
+            current.cursors = []
+            return
+        self._save_cursor()
+        cursors: list[HunkCursor] = []
+        for hunk_i, line_i in sorted(self._cursors.items()):
+            if hunk_i in self._done_set or not (0 <= hunk_i < len(self._prepared)):
+                continue
+            col, remaining = self._line_offset(hunk_i, line_i)
+            cursors.append(
+                HunkCursor(hunk=hunk_i, line=line_i, col=col, remaining=remaining)
+            )
+        current.cursors = cursors
+        current.line = self._line_i
+        current.col, current.remaining = self._line_offset(current.hunk, self._line_i)
+
+    def _restore_saved_cursors(self) -> None:
+        current = self.progress.current
+        positions = {cursor.hunk: cursor for cursor in current.cursors}
+        if (
+            current.hunk not in positions
+            and (current.line or current.col or current.remaining is not None)
+        ):
+            positions[current.hunk] = HunkCursor(
+                hunk=current.hunk,
+                line=current.line,
+                col=current.col,
+                remaining=current.remaining,
+            )
+        for hunk_i, cursor in positions.items():
+            if hunk_i in self._done_set or not (0 <= hunk_i < len(self._prepared)):
+                continue
+            self._cursors[hunk_i] = cursor.line
+            self._file_cursor[self._hunks[hunk_i].path] = hunk_i
+            lines = self._prepared[hunk_i].lines
+            if not (0 <= cursor.line < len(lines)):
+                continue
+            line = lines[cursor.line]
+            if line.kind == "ADD":
+                line.col = min(max(cursor.col, 0), len(line.typing))
+            elif line.kind == "DEL" and cursor.remaining is not None:
+                line.remaining = min(max(cursor.remaining, 0), len(line.display))
+        if current.hunk in self._cursors:
+            self._line_i = self._cursors[current.hunk]
 
     def _parent_of(self, sha: str) -> str | None:
         shas = self.progress.first_parent_shas
@@ -177,6 +239,7 @@ class Session:
         self._line_i = 0
         if self._hunks and 0 <= self.progress.current.hunk < len(self._hunks):
             self.progress.current.file = self._hunks[self.progress.current.hunk].path
+        self._restore_saved_cursors()
         self._skip_non_targets()
 
     def _restore_workspace(self) -> None:
@@ -301,6 +364,15 @@ class Session:
         lines = self._prepared[self.progress.current.hunk].lines
         while self._line_i < len(lines) and lines[self._line_i].skip:
             self._line_i += 1
+        self._place_at_code_start()
+
+    def _place_at_code_start(self) -> None:
+        line = self._current_line()
+        if line is None or line.kind != "ADD" or line.col != 0:
+            return
+        indent = leading_indent(line.typing)
+        if indent:
+            line.col = indent
 
     def _hunk_done(self) -> bool:
         hunk_i = self.progress.current.hunk
@@ -319,7 +391,15 @@ class Session:
                 self._finish_commit(empty=True)
                 continue
             self._complete_skippable()
-            nxt = self._next_typable_hunk(prefer_file=self.progress.current.file)
+            hunk_i = self.progress.current.hunk
+            if (
+                0 <= hunk_i < len(self._prepared)
+                and hunk_i not in self._done_set
+                and not self._prepared[hunk_i].is_skippable
+            ):
+                nxt = hunk_i
+            else:
+                nxt = self._next_typable_hunk(prefer_file=self.progress.current.file)
             if nxt is None:
                 self._finish_commit(empty=False)
                 continue

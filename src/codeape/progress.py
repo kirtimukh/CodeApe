@@ -6,11 +6,23 @@ from pathlib import Path
 
 
 @dataclass
+class HunkCursor:
+    hunk: int
+    line: int
+    col: int = 0
+    remaining: int | None = None
+
+
+@dataclass
 class Current:
     sha: str | None
     file: str
     hunk: int
     done_hunks: list[int] = field(default_factory=list)
+    line: int = 0
+    col: int = 0
+    remaining: int | None = None
+    cursors: list[HunkCursor] = field(default_factory=list)
 
 
 @dataclass
@@ -64,6 +76,10 @@ class Progress:
                 file=data["current"].get("file", ""),
                 hunk=int(data["current"].get("hunk", 0)),
                 done_hunks=_load_done_hunks(data["current"]),
+                line=int(data["current"].get("line", 0)),
+                col=int(data["current"].get("col", 0)),
+                remaining=_load_remaining(data["current"].get("remaining")),
+                cursors=_load_cursors(data["current"]),
             ),
             skipped=Skipped(
                 shas=list(data.get("skipped", {}).get("shas", [])),
@@ -77,6 +93,27 @@ def _load_done_hunks(current: dict) -> list[int]:
     if "done_hunks" in current:
         return [int(i) for i in current["done_hunks"]]
     return list(range(int(current.get("hunk", 0))))
+
+
+def _load_remaining(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _load_cursors(current: dict) -> list[HunkCursor]:
+    raw = current.get("cursors") or []
+    cursors: list[HunkCursor] = []
+    for item in raw:
+        cursors.append(
+            HunkCursor(
+                hunk=int(item["hunk"]),
+                line=int(item.get("line", 0)),
+                col=int(item.get("col", 0)),
+                remaining=_load_remaining(item.get("remaining")),
+            )
+        )
+    return cursors
 
 
 def new_progress(origin: str, shas: list[str]) -> Progress:
