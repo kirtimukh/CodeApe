@@ -56,6 +56,7 @@ class ViewState:
     commit_index: int
     commit_total: int
     file: str
+    files: list[str]
     file_index: int
     file_total: int
     hunk_index: int
@@ -110,6 +111,10 @@ class Session:
         self._hunks: list[Hunk] = []
         self._prepared: list[PreparedHunk] = []
         self._parent_files: dict[str, list[str] | None] = {}
+        self._added_files: dict[str, list[str]] = {}
+        self._done_set: set[int] = set()
+        self._cursors: dict[int, int] = {}
+        self._file_cursor: dict[str, int] = {}
         self._parent_sha: str | None = None
         self._line_i = 0
         self._subject = ""
@@ -146,33 +151,56 @@ class Session:
         self._hunks = commit_hunks(self.paths.mirror, self._parent_sha, sha)
         self._prepared = [_prepare_hunk(h) for h in self._hunks]
         self._parent_files = {}
+        self._added_files = {}
+        self._cursors = {}
+        self._file_cursor = {}
+        self._done_set = {
+            i
+            for i in self.progress.current.done_hunks
+            if 0 <= i < len(self._hunks)
+        }
+        self._sync_done()
         for hunk in self._hunks:
             if hunk.path not in self._parent_files:
                 self._parent_files[hunk.path] = file_at(
                     self.paths.mirror, self._parent_sha, hunk.path
                 )
+            if (
+                self._parent_files[hunk.path] is None
+                and hunk.path not in self._added_files
+            ):
+                added = file_at(self.paths.mirror, sha, hunk.path)
+                if added is not None:
+                    self._added_files[hunk.path] = added
         if restore:
             self._restore_workspace()
         self._line_i = 0
-        if self._hunks and self.progress.current.hunk < len(self._hunks):
+        if self._hunks and 0 <= self.progress.current.hunk < len(self._hunks):
             self.progress.current.file = self._hunks[self.progress.current.hunk].path
         self._skip_non_targets()
 
     def _restore_workspace(self) -> None:
-        """Reset current-commit files from the parent tree, then replay completed hunks."""
-        completed = self.progress.current.hunk
+        """Reset current-commit files from the parent tree, then replay completed hunks.
+
+        Newly added files are written from the commit tree immediately so imports
+        in files the user is typing already exist in the workspace.
+        """
         by_path: dict[str, list[Hunk]] = {}
-        for hunk in self._hunks[:completed]:
-            by_path.setdefault(hunk.path, []).append(hunk)
+        for i, hunk in enumerate(self._hunks):
+            if i in self._done_set:
+                by_path.setdefault(hunk.path, []).append(hunk)
         for path, original in self._parent_files.items():
-            applied = by_path.get(path, [])
-            self._write_path(path, original, applied)
+            self._write_path(path, original, by_path.get(path, []))
 
     def _write_path(
         self, path: str, original: list[str] | None, applied: list[Hunk]
     ) -> None:
         all_for_path = [h for h in self._hunks if h.path == path]
         done_all = applied and len(applied) == len(all_for_path)
+        added = self._added_files.get(path)
+        if added is not None and not done_all:
+            write_file(self.paths.workspace, path, added)
+            return
         if not applied:
             if original is None:
                 delete_file(self.paths.workspace, path)
@@ -185,13 +213,87 @@ class Session:
             return
         write_file(self.paths.workspace, path, lines)
 
-    def _apply_completed_prefix(self) -> None:
-        completed = self.progress.current.hunk
-        if completed <= 0:
-            return
-        path = self._hunks[completed - 1].path
-        applied = [h for h in self._hunks[:completed] if h.path == path]
+    def _sync_done(self) -> None:
+        self.progress.current.done_hunks = sorted(self._done_set)
+
+    def _apply_file(self, path: str) -> None:
+        applied = [
+            hunk
+            for i, hunk in enumerate(self._hunks)
+            if i in self._done_set and hunk.path == path
+        ]
         self._write_path(path, self._parent_files.get(path), applied)
+
+    def _mark_done(self, indices: list[int] | None = None) -> None:
+        if indices is None:
+            indices = [i for i in range(len(self._hunks)) if i not in self._done_set]
+        dirty: set[str] = set()
+        for i in indices:
+            if i in self._done_set or not (0 <= i < len(self._hunks)):
+                continue
+            self._done_set.add(i)
+            self._cursors.pop(i, None)
+            dirty.add(self._hunks[i].path)
+        for path in dirty:
+            self._apply_file(path)
+        self._sync_done()
+
+    def _file_paths(self) -> list[str]:
+        return list(dict.fromkeys(hunk.path for hunk in self._hunks))
+
+    def _nav_files(self) -> list[str]:
+        """Files the user can switch to: still-typable changes, plus new files."""
+        return [
+            path
+            for path in self._file_paths()
+            if path in self._added_files or self._first_typable_hunk(path) is not None
+        ]
+
+    def _first_typable_hunk(self, path: str) -> int | None:
+        for i, hunk in enumerate(self._hunks):
+            if (
+                hunk.path == path
+                and i not in self._done_set
+                and not self._prepared[i].is_skippable
+            ):
+                return i
+        return None
+
+    def _next_typable_hunk(self, *, prefer_file: str | None) -> int | None:
+        files = self._file_paths()
+        if prefer_file in files:
+            start = files.index(prefer_file)
+            files = files[start:] + files[:start]
+        for path in files:
+            found = self._first_typable_hunk(path)
+            if found is not None:
+                return found
+        return None
+
+    def _save_cursor(self) -> None:
+        hunk_i = self.progress.current.hunk
+        if 0 <= hunk_i < len(self._hunks):
+            self._cursors[hunk_i] = self._line_i
+            self._file_cursor[self._hunks[hunk_i].path] = hunk_i
+
+    def _focus_hunk(self, hunk_i: int) -> None:
+        self.progress.current.hunk = hunk_i
+        self.progress.current.file = self._hunks[hunk_i].path
+        self._file_cursor[self._hunks[hunk_i].path] = hunk_i
+        if hunk_i in self._done_set:
+            self._line_i = len(self._prepared[hunk_i].lines)
+            return
+        self._line_i = self._cursors.get(hunk_i, 0)
+        self._skip_non_targets()
+
+    def _complete_skippable(self) -> None:
+        self._mark_done(
+            [
+                i
+                for i, prepared in enumerate(self._prepared)
+                if i not in self._done_set and prepared.is_skippable
+            ]
+        )
 
     def _skip_non_targets(self) -> None:
         if self.done or self.progress.current.hunk >= len(self._prepared):
@@ -201,9 +303,10 @@ class Session:
             self._line_i += 1
 
     def _hunk_done(self) -> bool:
-        if self.progress.current.hunk >= len(self._prepared):
+        hunk_i = self.progress.current.hunk
+        if hunk_i >= len(self._prepared) or hunk_i in self._done_set:
             return True
-        return self._line_i >= len(self._prepared[self.progress.current.hunk].lines)
+        return self._line_i >= len(self._prepared[hunk_i].lines)
 
     def _advance_to_typable(self) -> None:
         while not self.done:
@@ -215,21 +318,20 @@ class Session:
             if not self._hunks:
                 self._finish_commit(empty=True)
                 continue
-            if self.progress.current.hunk >= len(self._hunks):
+            self._complete_skippable()
+            nxt = self._next_typable_hunk(prefer_file=self.progress.current.file)
+            if nxt is None:
                 self._finish_commit(empty=False)
                 continue
-            prepared = self._prepared[self.progress.current.hunk]
-            self._skip_non_targets()
-            if prepared.is_skippable or self._hunk_done():
+            self._focus_hunk(nxt)
+            if self._hunk_done():
                 self._complete_hunk()
                 continue
-            self.progress.current.file = prepared.hunk.path
             self._save()
             return
 
     def _complete_hunk(self) -> None:
-        self.progress.current.hunk += 1
-        self._apply_completed_prefix()
+        self._mark_done([self.progress.current.hunk])
         self._line_i = 0
         self._save()
 
@@ -332,20 +434,57 @@ class Session:
     def skip_commit(self) -> None:
         if self.done or self.progress.current.sha is None:
             return
-        while (
-            not self.done
-            and self.progress.current.sha is not None
-            and self.progress.current.hunk < len(self._hunks)
-        ):
-            self._complete_hunk()
+        self._mark_done()
+        self._save()
         if not self.done:
             self._advance_to_typable()
+
+    def next_file(self) -> None:
+        self._step_file(1)
+
+    def prev_file(self) -> None:
+        self._step_file(-1)
+
+    def _step_file(self, delta: int) -> None:
+        if self.done:
+            return
+        files = self._nav_files()
+        if len(files) < 2:
+            return
+        self._save_cursor()
+        current = self.progress.current.file
+        if current not in files:
+            target = files[0] if delta > 0 else files[-1]
+            self._focus_file(target)
+            self._save()
+            return
+        idx = files.index(current)
+        self._focus_file(files[(idx + delta) % len(files)])
+        self._save()
+
+    def _focus_file(self, path: str) -> None:
+        last = self._file_cursor.get(path)
+        if (
+            last is not None
+            and last not in self._done_set
+            and 0 <= last < len(self._hunks)
+            and self._hunks[last].path == path
+        ):
+            hunk_i = last
+        else:
+            hunk_i = self._first_typable_hunk(path)
+            if hunk_i is None:
+                matches = [i for i, hunk in enumerate(self._hunks) if hunk.path == path]
+                if not matches:
+                    return
+                hunk_i = matches[-1]
+        self._focus_hunk(hunk_i)
 
     def view(self) -> ViewState:
         shas = self.progress.first_parent_shas
         sha = self.progress.current.sha or (shas[-1] if shas else "")
         commit_index = len(self.progress.completed_shas) + (0 if self.done else 1)
-        files = list(dict.fromkeys(h.path for h in self._hunks))
+        files = self._nav_files()
         current_file = self.progress.current.file
         if current_file in files:
             file_index = files.index(current_file) + 1
@@ -394,6 +533,7 @@ class Session:
             commit_index=commit_index,
             commit_total=len(shas),
             file=current_file,
+            files=files,
             file_index=file_index,
             file_total=len(files),
             hunk_index=hunk_index,

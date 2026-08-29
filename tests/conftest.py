@@ -38,16 +38,16 @@ def commit_file(repo: Path, relative: str, content: str, message: str) -> None:
     git(repo, "commit", "-m", message)
 
 
-@pytest.fixture
-def sample_repo(tmp_path: Path) -> Path:
+def origin_with_hello(tmp_path: Path) -> Path:
     repo = tmp_path / "origin"
     init_git(repo)
-    commit_file(
-        repo,
-        "hello.py",
-        "def hello():\n    return 1\n",
-        "add hello",
-    )
+    commit_file(repo, "hello.py", "def hello():\n    return 1\n", "add hello")
+    return repo
+
+
+@pytest.fixture
+def sample_repo(tmp_path: Path) -> Path:
+    repo = origin_with_hello(tmp_path)
     commit_file(
         repo,
         "hello.py",
@@ -66,6 +66,37 @@ def sample_repo(tmp_path: Path) -> Path:
         "[[package]]\n",
         "add lockfile",
     )
+    return repo
+
+
+@pytest.fixture
+def import_added_repo(tmp_path: Path) -> Path:
+    """A repo whose second commit adds a module and imports it from an existing file."""
+    repo = origin_with_hello(tmp_path)
+    (repo / "util.py").write_text("def answer():\n    return 2\n")
+    (repo / "hello.py").write_text(
+        "from util import answer\n\ndef hello():\n    return answer()\n"
+    )
+    git(repo, "add", "util.py", "hello.py")
+    git(repo, "commit", "-m", "add util and import it")
+    return repo
+
+
+@pytest.fixture
+def mixed_nav_repo(tmp_path: Path) -> Path:
+    """Second commit: typable edit, comment-only edit, and a new file."""
+    repo = origin_with_hello(tmp_path)
+    commit_file(
+        repo,
+        "notes.py",
+        "def notes():\n    return 0\n",
+        "add notes",
+    )
+    (repo / "hello.py").write_text("def hello():\n    return 2\n")
+    (repo / "notes.py").write_text("def notes():\n    # later\n    return 0\n")
+    (repo / "util.py").write_text("def answer():\n    return 2\n")
+    git(repo, "add", "hello.py", "notes.py", "util.py")
+    git(repo, "commit", "-m", "edit hello, comment notes, add util")
     return repo
 
 

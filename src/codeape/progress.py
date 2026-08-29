@@ -10,6 +10,7 @@ class Current:
     sha: str | None
     file: str
     hunk: int
+    done_hunks: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +63,7 @@ class Progress:
                 sha=data["current"].get("sha"),
                 file=data["current"].get("file", ""),
                 hunk=int(data["current"].get("hunk", 0)),
+                done_hunks=_load_done_hunks(data["current"]),
             ),
             skipped=Skipped(
                 shas=list(data.get("skipped", {}).get("shas", [])),
@@ -69,6 +71,12 @@ class Progress:
             ),
             stats=Stats(**data.get("stats", {})),
         )
+
+
+def _load_done_hunks(current: dict) -> list[int]:
+    if "done_hunks" in current:
+        return [int(i) for i in current["done_hunks"]]
+    return list(range(int(current.get("hunk", 0))))
 
 
 def new_progress(origin: str, shas: list[str]) -> Progress:

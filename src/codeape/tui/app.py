@@ -39,7 +39,12 @@ class StatusBar(Static):
             style=pal.STATUS_DIM,
         )
         out.append("\n")
-        out.append(f"  {view.file}", style=pal.STATUS)
+        names = view.files or ([view.file] if view.file else [])
+        for i, name in enumerate(names):
+            if i:
+                out.append("  ·  ", style=pal.STATUS_DIM)
+            style = pal.STATUS if name == view.file else pal.STATUS_DIM
+            out.append(name, style=style)
         out.append(
             f"    {view.wpm:.0f} wpm  {view.accuracy * 100:.0f}%"
             f"  tab {view.chars_assisted}",
@@ -69,8 +74,11 @@ class CodeApeApp(App):
         Binding("ctrl+s", "skip_hunk", "Skip hunk"),
         Binding("ctrl+k", "skip_commit", "Skip commit"),
         Binding("ctrl+d", "accept_del", "Accept del"),
+        Binding("ctrl+n", "next_file", "Next file"),
+        Binding("ctrl+b", "prev_file", "Prev file"),
         Binding("tab", "tab", "Tab", show=False, priority=True),
     ]
+    _BOUND_KEYS = {binding.key for binding in BINDINGS}
 
     def __init__(self, session: Session) -> None:
         super().__init__()
@@ -91,7 +99,7 @@ class CodeApeApp(App):
             self.session.persist()
 
     def on_key(self, event: Key) -> None:
-        if event.key in {"tab", "ctrl+s", "ctrl+k", "ctrl+d", "ctrl+q"}:
+        if event.key in self._BOUND_KEYS:
             return
         if event.key == "enter":
             self.session.on_enter()
@@ -120,6 +128,14 @@ class CodeApeApp(App):
 
     def action_accept_del(self) -> None:
         self.session.on_accept_del()
+        self._refresh_view()
+
+    def action_next_file(self) -> None:
+        self.session.next_file()
+        self._refresh_view()
+
+    def action_prev_file(self) -> None:
+        self.session.prev_file()
         self._refresh_view()
 
     def action_quit(self) -> None:

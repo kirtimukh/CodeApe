@@ -32,7 +32,7 @@ class TypingCanvas(Static):
         current_i = next((i for i, line in enumerate(view.lines) if line.is_current), None)
         out = Text()
         for i, line in enumerate(view.lines):
-            past = current_i is not None and i < current_i
+            past = current_i is None or i < current_i
             out.append(f"{line.gutter} ", style=self._gutter_style(line))
             out.append_text(self._body(line, past=past))
             out.append("\n")
