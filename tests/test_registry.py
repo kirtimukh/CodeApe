@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from codeape.cli import cmd_init
+from codeape.tui.picker import paginate
 from codeape.history import clone_url, first_parent_shas, git
 from codeape.paths import load_registry, load_repo_paths
 from codeape.progress import Progress
@@ -70,3 +71,37 @@ def test_progress_round_trip(tmp_path: Path):
     assert loaded.attempts["aaa"].cursors[0].col == 2
     assert loaded.attempts["bbb"].status == "skipped"
     assert loaded.attempts["bbb"].patch.startswith("diff --git")
+
+
+def test_paginate_clamps_and_slices():
+    items = list(range(45))
+    page0, page, pages = paginate(items, 0, size=20)
+    assert page0 == list(range(20))
+    assert page == 0
+    assert pages == 3
+    page2, page, pages = paginate(items, 99, size=20)
+    assert page2 == list(range(40, 45))
+    assert page == 2
+    assert pages == 3
+    empty, page, pages = paginate([], 3)
+    assert empty == []
+    assert page == 0
+    assert pages == 1
+
+
+def test_purge_codeape_home_script(tmp_path, monkeypatch):
+    import importlib.util
+
+    home = tmp_path / "old-home"
+    home.mkdir()
+    (home / "progress.json").write_text('{"first_parent_shas": []}\n')
+    monkeypatch.setenv("CODEAPE_HOME", str(home))
+    spec = importlib.util.spec_from_file_location(
+        "purge_codeape_home",
+        Path(__file__).resolve().parents[1] / "scripts" / "purge_codeape_home.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.main()
+    assert not home.exists()

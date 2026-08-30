@@ -60,15 +60,11 @@ def snapshot_attempt(workspace: Path) -> str:
     return git(["diff", "--cached"], cwd=workspace).stdout
 
 
-def apply_attempt(workspace: Path, patch: str) -> None:
+def apply_attempt(workspace: Path, patch: str) -> bool:
     if not patch.strip():
-        return
+        return True
     try:
         git(["apply", "--whitespace=nowarn"], cwd=workspace, input_text=patch)
     except GitError:
-        git(
-            ["apply", "--whitespace=nowarn", "--reject"],
-            cwd=workspace,
-            input_text=patch,
-            check=False,
-        )
+        return False
+    return True

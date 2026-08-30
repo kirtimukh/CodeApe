@@ -1,4 +1,4 @@
-from codeape.apply import apply_hunks
+from codeape.apply import apply_attempt, apply_hunks
 from codeape.diff_engine import DiffLine, Hunk, commit_hunks
 from codeape.history import first_parent_shas
 
@@ -44,6 +44,23 @@ def test_commit_hunks_skips_lockfile(sample_repo):
     parent, sha = shas[-2], shas[-1]
     hunks = commit_hunks(sample_repo, parent, sha)
     assert hunks == []
+
+
+def test_apply_attempt_rejects_bad_patch(sample_repo, tmp_path):
+    dest = tmp_path / "ws"
+    dest.mkdir()
+    from codeape.history import git
+
+    git(["init"], cwd=dest)
+    git(["config", "user.name", "Test"], cwd=dest)
+    git(["config", "user.email", "test@example.com"], cwd=dest)
+    (dest / "a.py").write_text("x = 1\n")
+    git(["add", "a.py"], cwd=dest)
+    git(["commit", "-m", "add"], cwd=dest)
+
+    assert apply_attempt(dest, "") is True
+    assert apply_attempt(dest, "this is not a patch\n") is False
+    assert list(dest.glob("*.rej")) == []
 
 
 def test_commit_hunks_mixed_change(sample_repo):

@@ -47,6 +47,17 @@ def first_parent_shas(repo: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
+def first_parent_subjects(repo: Path) -> list[tuple[str, str]]:
+    result = git(["log", "--reverse", "--first-parent", "--format=%H %s"], cwd=repo)
+    rows: list[tuple[str, str]] = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        sha, _, subject = line.partition(" ")
+        rows.append((sha, subject))
+    return rows
+
+
 def commit_meta(repo: Path, sha: str) -> CommitMeta:
     header = git(
         ["show", "-s", "--format=%an%n%ae%n%aI%n%s", sha],

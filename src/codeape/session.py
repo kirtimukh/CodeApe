@@ -12,7 +12,13 @@ from codeape.apply import (
 )
 from codeape.comments import split_code_and_comment
 from codeape.diff_engine import DiffLine, Hunk, commit_hunks
-from codeape.history import checkout_parent, commit_meta, file_at, first_parent_shas
+from codeape.history import (
+    checkout_parent,
+    commit_meta,
+    file_at,
+    first_parent_shas,
+    first_parent_subjects,
+)
 from codeape.paths import RepoPaths
 from codeape.progress import (
     STATUS_COMPLETED,
@@ -133,6 +139,10 @@ class Session:
         self.paths = paths
         self.progress = progress
         self._shas = first_parent_shas(self.paths.mirror)
+        if progress.current_target is None:
+            resume = self._first_resumable()
+            if resume:
+                progress.current_target = resume
         self.done = progress.current_target is None
         self._hunks: list[Hunk] = []
         self._prepared: list[PreparedHunk] = []
@@ -293,8 +303,8 @@ class Session:
 
     def _restore_workspace(self) -> None:
         checkout_parent(self.paths.workspace, self._parent_sha)
-        apply_attempt(self.paths.workspace, self._att.patch)
-        if not self._att.patch.strip():
+        applied = apply_attempt(self.paths.workspace, self._att.patch)
+        if not applied or not self._att.patch.strip():
             self._restore_done_hunks()
         self._write_added_previews()
 
@@ -465,6 +475,37 @@ class Session:
                 return sha
         return None
 
+    def _first_resumable(self) -> str | None:
+        for sha in self._shas:
+            attempt = self.progress.attempts.get(sha)
+            if attempt is not None and attempt.status == STATUS_SKIPPED:
+                return sha
+            if attempt is not None and attempt.status == STATUS_IN_PROGRESS:
+                return sha
+        return None
+
+    def _park_or_resume(self, sha: str) -> None:
+        nxt = self._next_unfinished(sha)
+        if nxt is not None:
+            self._open_lesson(nxt)
+            return
+        resume = self._first_resumable()
+        if resume is None:
+            self.progress.current_target = None
+            self.done = True
+            self._save()
+            return
+        if resume == sha:
+            self.done = False
+            self._save()
+            return
+        self._open_lesson(resume)
+
+    def _is_readonly(self) -> bool:
+        if self.done or self.progress.current_target is None:
+            return True
+        return self._att.status == STATUS_COMPLETED
+
     def _open_lesson(self, target: str, *, auto_advance: bool = True) -> None:
         self.progress.current_target = target
         self.done = False
@@ -512,16 +553,10 @@ class Session:
         sha = self.progress.current_target
         assert sha is not None
         self._persist_status(STATUS_COMPLETED)
-        nxt = self._next_unfinished(sha)
-        if nxt is None:
-            self.progress.current_target = None
-            self.done = True
-            self._save()
-            return
-        self._open_lesson(nxt)
+        self._park_or_resume(sha)
 
     def _current_line(self) -> SessionLine | None:
-        if self.done or self.progress.current_target is None:
+        if self._is_readonly():
             return None
         if self._att.hunk >= len(self._prepared):
             return None
@@ -544,6 +579,8 @@ class Session:
         if hunk_i in self._done_set or not (0 <= hunk_i < len(self._hunks)):
             return
         hunk = self._hunks[hunk_i]
+        if hunk.path in self._added_files:
+            return
         prepared = self._prepared[hunk_i]
         partial: list[DiffLine] = []
         for i, (raw, sl) in enumerate(zip(hunk.lines, prepared.lines)):
@@ -663,23 +700,17 @@ class Session:
         self._after_line()
 
     def skip_hunk(self) -> None:
-        if self.done:
+        if self._is_readonly():
             return
         self._complete_hunk()
         self._advance_to_typable()
 
     def skip_commit(self) -> None:
-        if self.done or self.progress.current_target is None:
+        if self._is_readonly() or self.progress.current_target is None:
             return
         sha = self.progress.current_target
         self._persist_status(STATUS_SKIPPED)
-        nxt = self._next_unfinished(sha)
-        if nxt is None:
-            self.progress.current_target = None
-            self.done = True
-            self._save()
-            return
-        self._open_lesson(nxt)
+        self._park_or_resume(sha)
 
     def switch_lesson(self, target: str) -> None:
         if target not in self._shas:
@@ -739,13 +770,15 @@ class Session:
 
     def lessons(self) -> list[LessonRow]:
         rows: list[LessonRow] = []
-        for index, sha in enumerate(self._shas, start=1):
+        for index, (sha, subject) in enumerate(
+            first_parent_subjects(self.paths.mirror), start=1
+        ):
             attempt = self.progress.attempts.get(sha)
             status = attempt.status if attempt else "pending"
             rows.append(
                 LessonRow(
                     sha=sha,
-                    subject=commit_meta(self.paths.mirror, sha).subject,
+                    subject=subject,
                     status=status,
                     current=sha == self.progress.current_target,
                     index=index,

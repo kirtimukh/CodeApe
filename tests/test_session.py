@@ -255,10 +255,57 @@ def test_skip_commit_keeps_partial_attempt(sample_repo, codeape_home):
     saved = Progress.load(paths.progress_file)
     attempt = saved.attempts[shas[0]]
     assert attempt.status == STATUS_SKIPPED
-    assert "return 1" not in attempt.patch
-    assert "def" in attempt.patch
+    assert attempt.col == 3 or any(cursor.col == 3 for cursor in attempt.cursors)
     assert saved.current_target == shas[1]
     assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
+
+
+def test_skip_last_lesson_stays_resumable(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
+    session.skip_commit()
+    session.skip_commit()
+
+    assert session.done is False
+    saved = Progress.load(paths.progress_file)
+    assert saved.attempts[shas[0]].status == STATUS_SKIPPED
+    assert saved.current_target is not None
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    assert resumed.done is False
+    assert resumed.progress.current_target in saved.attempts
+
+
+def test_persist_keeps_added_file_preview(import_added_repo, codeape_home):
+    session, paths = _open_session(import_added_repo)
+    session.skip_commit()
+    if session.view().file != "util.py":
+        session.next_file()
+    assert session.view().file == "util.py"
+    line = _current_line(session)
+    for ch in line.typing[:3]:
+        session.on_char(ch)
+    session.persist()
+    assert (paths.workspace / "util.py").read_text() == "def answer():\n    return 2\n"
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    assert (paths.workspace / "util.py").read_text() == "def answer():\n    return 2\n"
+    assert _current_line(resumed).col == 3
+
+
+def test_completed_lesson_ignores_typing(sample_repo, codeape_home):
+    session, _ = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
+    _type_line(session, "def hello():")
+    _type_line(session, "return 1")
+    assert session.view().sha == shas[1]
+    session.switch_lesson(shas[0])
+    assert session.view().attempt_status == STATUS_COMPLETED
+    typed = session.progress.stats.chars_typed
+    session.on_char("x")
+    session.on_enter()
+    session.skip_hunk()
+    assert session.progress.stats.chars_typed == typed
+    assert session.view().sha == shas[0]
 
 
 def test_switch_lesson_restores_attempt(sample_repo, codeape_home):

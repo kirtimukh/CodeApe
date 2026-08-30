@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -12,6 +14,21 @@ from codeape.paths import RepoEntry, load_repo_paths
 from codeape.progress import Progress
 from codeape.session import LessonRow
 from codeape.tui import palette as pal
+
+LESSON_PAGE_SIZE = 20
+
+T = TypeVar("T")
+
+
+def paginate(
+    items: list[T], page: int, size: int = LESSON_PAGE_SIZE
+) -> tuple[list[T], int, int]:
+    if not items:
+        return [], 0, 1
+    pages = (len(items) + size - 1) // size
+    page = max(0, min(page, pages - 1))
+    start = page * size
+    return items[start : start + size], page, pages
 
 
 def _repo_label(entry: RepoEntry) -> str:
@@ -84,25 +101,51 @@ class LessonSwitcher(ModalScreen[str | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("q", "cancel", "Cancel"),
+        Binding("left", "page_prev", "Prev page"),
+        Binding("right", "page_next", "Next page"),
+        Binding("pageup", "page_prev", "Prev page", show=False),
+        Binding("pagedown", "page_next", "Next page", show=False),
     ]
 
     def __init__(self, rows: list[LessonRow]) -> None:
         super().__init__()
         self.rows = rows
+        current_i = next((i for i, row in enumerate(rows) if row.current), 0)
+        self.page = current_i // LESSON_PAGE_SIZE
 
     def compose(self) -> ComposeResult:
         with Vertical(id="lesson-box"):
-            yield Static("Switch lesson")
-            options = []
-            for row in self.rows:
-                mark = "*" if row.current else " "
-                options.append(
-                    Option(
-                        f"{mark} {row.index:3}  {row.sha[:7]}  {row.status:12}  {row.subject}",
-                        id=row.sha,
-                    )
+            yield Static("Switch lesson", id="lesson-title")
+            yield OptionList(id="lessons")
+
+    def on_mount(self) -> None:
+        self._render_page()
+
+    def _render_page(self) -> None:
+        visible, self.page, pages = paginate(self.rows, self.page)
+        title = self.query_one("#lesson-title", Static)
+        title.update(f"Switch lesson  ({self.page + 1}/{pages})")
+        listing = self.query_one("#lessons", OptionList)
+        listing.clear_options()
+        for row in visible:
+            mark = "*" if row.current else " "
+            listing.add_option(
+                Option(
+                    f"{mark} {row.index:3}  {row.sha[:7]}  {row.status:12}  {row.subject}",
+                    id=row.sha,
                 )
-            yield OptionList(*options, id="lessons")
+            )
+
+    def action_page_next(self) -> None:
+        _, _, pages = paginate(self.rows, self.page)
+        if self.page + 1 < pages:
+            self.page += 1
+            self._render_page()
+
+    def action_page_prev(self) -> None:
+        if self.page > 0:
+            self.page -= 1
+            self._render_page()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(str(event.option_id))
