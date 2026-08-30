@@ -86,6 +86,27 @@ def test_tab_completes_identifier(sample_repo, codeape_home):
     assert session.progress.stats.chars_typed == 0
 
 
+def test_tab_covers_connected_punct_spaces_and_newline(sample_repo, codeape_home):
+    session, _ = _open_session(sample_repo)
+    session.on_tab()
+    current = _current_line(session)
+    assert current.typing[: current.col] == "def "
+    session.on_tab()
+    current = _current_line(session)
+    assert current.typing[: current.col] == "def hello()"
+    session.on_tab()
+    current = _current_line(session)
+    assert current.typing[current.col :].startswith("return")
+
+
+def test_line_tab_completes_rest_of_line(sample_repo, codeape_home):
+    session, _ = _open_session(sample_repo)
+    session.on_line_tab()
+    current = _current_line(session)
+    assert current.typing[current.col :].startswith("return")
+    assert session.progress.stats.chars_assisted == len("def hello():")
+
+
 def test_added_files_exist_when_commit_starts(import_added_repo, codeape_home):
     session, paths = _open_session(import_added_repo)
     session.skip_commit()

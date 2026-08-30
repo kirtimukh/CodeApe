@@ -38,14 +38,25 @@ def test_tab_leading_indent():
 
 def test_tab_word_and_symbol():
     line = "    total = math.fsum(values)"
-    assert tab_target(line, 4) == 9  # total
-    assert tab_target(line, 10) == 11  # =
-    assert tab_target(line, 12) == 16  # math
+    assert tab_target(line, 4) == 10  # total + space
+    assert tab_target(line, 10) == 12  # = + space
+    assert tab_target(line, 12) == 17  # math + .
     assert tab_target(line, 16) == 17  # .
-    assert tab_target(line, 5) == 9  # mid-word
-    assert tab_target(line, 8) == 9  # last char of word
-    assert tab_target(line, 13) == 16  # mid-identifier
-    assert tab_target(line, 9) is None  # between tokens
+    assert tab_target(line, 17) == 22  # fsum + (
+    assert tab_target(line, 22) == 29  # values + )
+    assert tab_target(line, 5) == 10  # mid-word + space
+    assert tab_target(line, 8) == 10  # last char of word + space
+    assert tab_target(line, 13) == 17  # mid-identifier + .
+    assert tab_target(line, 9) == 10  # skip space
+
+
+def test_tab_connected_brackets_and_comma():
+    assert tab_target("arr[0]", 0) == 4  # arr[
+    assert tab_target("arr[0]", 4) == 6  # 0]
+    assert tab_target("foo, bar", 0) == 5  # foo, + space
+    assert tab_target("hello()", 0) == 7  # hello()
+    assert tab_target('"hello"', 1) == 7  # hello"
+    assert tab_target("'x'", 1) == 3  # x'
 
 
 def test_tab_number():

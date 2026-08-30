@@ -5,6 +5,7 @@ import re
 TOKEN_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|[^\w\s]+"
 )
+CONNECTED = frozenset(".(){}[],'\"")
 
 
 def leading_indent(line: str) -> int:
@@ -19,9 +20,24 @@ def tab_target(line: str, col: int) -> int | None:
     leading = leading_indent(line)
     if col < leading:
         return leading
+    if col >= len(line):
+        return None
+    if line[col].isspace():
+        end = col + 1
+        while end < len(line) and line[end].isspace():
+            end += 1
+        return end
+    end = None
     for match in TOKEN_RE.finditer(line):
         if match.start() <= col < match.end():
-            return match.end()
+            end = match.end()
+            break
         if match.start() > col:
             break
-    return None
+    if end is None:
+        return None
+    while end < len(line) and line[end] in CONNECTED:
+        end += 1
+    while end < len(line) and line[end].isspace():
+        end += 1
+    return end

@@ -491,12 +491,28 @@ class Session:
         line = self._current_line()
         if line is None or line.kind != "ADD":
             return
+        if line.col >= len(line.typing):
+            self._after_line()
+            return
         target = tab_target(line.typing, line.col)
         if target is None or target <= line.col:
             return
         self.progress.stats.chars_assisted += target - line.col
         line.col = target
         line.miss = False
+        if line.col >= len(line.typing):
+            self._after_line()
+
+    def on_line_tab(self) -> None:
+        line = self._current_line()
+        if line is None or line.kind != "ADD":
+            return
+        remaining = len(line.typing) - line.col
+        if remaining > 0:
+            self.progress.stats.chars_assisted += remaining
+            line.col = len(line.typing)
+            line.miss = False
+        self._after_line()
 
     def on_accept_del(self) -> None:
         line = self._current_line()

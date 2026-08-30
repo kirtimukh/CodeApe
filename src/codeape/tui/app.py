@@ -74,9 +74,10 @@ class CodeApeApp(App):
         Binding("ctrl+s", "skip_hunk", "Skip hunk"),
         Binding("ctrl+k", "skip_commit", "Skip commit"),
         Binding("ctrl+d", "accept_del", "Accept del"),
-        Binding("ctrl+n", "next_file", "Next file"),
-        Binding("ctrl+b", "prev_file", "Prev file"),
+        Binding("shift+right", "next_file", "Next file", priority=True),
+        Binding("shift+left", "prev_file", "Prev file", priority=True),
         Binding("tab", "tab", "Tab", show=False, priority=True),
+        Binding("shift+tab", "line_tab", "Line tab", show=False, priority=True),
     ]
     _BOUND_KEYS = {binding.key for binding in BINDINGS}
 
@@ -116,6 +117,10 @@ class CodeApeApp(App):
 
     def action_tab(self) -> None:
         self.session.on_tab()
+        self._refresh_view()
+
+    def action_line_tab(self) -> None:
+        self.session.on_line_tab()
         self._refresh_view()
 
     def action_skip_hunk(self) -> None:
