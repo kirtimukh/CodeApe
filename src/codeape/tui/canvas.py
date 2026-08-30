@@ -65,6 +65,8 @@ class TypingCanvas(VerticalScroll):
         height: 1fr;
         overflow-x: hidden;
         overflow-y: auto;
+        scrollbar-visibility: hidden;
+        scrollbar-size: 0 0;
     }
     TypingCanvas > #body {
         width: 1fr;

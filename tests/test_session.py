@@ -53,6 +53,10 @@ def test_session_types_root_then_advances(sample_repo, codeape_home):
     assert current.col == 4
     assert current.typing[current.col :].startswith("return")
     _type_line(session, "return 2")
+    current = _current_line(session)
+    assert current.kind == "ADD"
+    assert "# note" in current.typing
+    session.on_line_tab()
     assert session.done
     assert (paths.workspace / "hello.py").read_text() == (
         "def hello():\n    # note\n    return 2\n"
@@ -61,7 +65,7 @@ def test_session_types_root_then_advances(sample_repo, codeape_home):
     assert head == shas[2]
 
 
-def test_session_skips_comments_and_lockfile(sample_repo, codeape_home):
+def test_session_types_comments_and_skips_lockfile(sample_repo, codeape_home):
     cmd_init(str(sample_repo))
     paths = load_repo_paths()
     progress = Progress.load(paths.progress_file)
@@ -74,6 +78,11 @@ def test_session_skips_comments_and_lockfile(sample_repo, codeape_home):
     progress.save(paths.progress_file)
 
     session = Session(paths, progress)
+    assert session.done is False
+    current = _current_line(session)
+    assert current.kind == "ADD"
+    assert "# note" in current.typing
+    session.on_line_tab()
     assert session.done
     assert session.progress.attempts[shas[2]].status == STATUS_COMPLETED
     assert session.progress.attempts[shas[3]].status == STATUS_COMPLETED
@@ -174,16 +183,17 @@ def test_navigate_only_typable_and_new_files(mixed_nav_repo, codeape_home):
     session.skip_commit()
 
     view = session.view()
-    assert set(view.files) == {"hello.py", "util.py"}
-    assert "notes.py" not in view.files
-    assert view.file_total == 2
+    assert set(view.files) == {"hello.py", "notes.py", "util.py"}
+    assert view.file_total == 3
 
     seen = {view.file}
     session.next_file()
     seen.add(session.view().file)
     session.next_file()
     seen.add(session.view().file)
-    assert seen == {"hello.py", "util.py"}
+    session.next_file()
+    seen.add(session.view().file)
+    assert seen == {"hello.py", "notes.py", "util.py"}
 
 
 def test_persist_remembers_in_progress_typing(sample_repo, codeape_home):

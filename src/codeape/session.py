@@ -10,7 +10,6 @@ from codeape.apply import (
     snapshot_attempt,
     write_file,
 )
-from codeape.comments import split_code_and_comment
 from codeape.diff_engine import DiffLine, Hunk, commit_hunks
 from codeape.history import (
     checkout_parent,
@@ -101,22 +100,21 @@ class ViewState:
     chars_assisted: int
 
 
-def _prepare_line(kind: str, content: str, filename: str) -> SessionLine:
-    code, suffix, comment_only = split_code_and_comment(content, filename)
-    if kind == "CTX" or comment_only:
+def _prepare_line(kind: str, content: str) -> SessionLine:
+    if kind == "CTX":
         return SessionLine(
             kind=kind,
             display=content,
             typing="",
-            comment_suffix=suffix if kind == "ADD" else "",
+            comment_suffix="",
             skip=True,
         )
     if kind == "ADD":
         return SessionLine(
             kind=kind,
             display=content,
-            typing=code,
-            comment_suffix=suffix,
+            typing=content,
+            comment_suffix="",
             skip=False,
         )
     return SessionLine(
@@ -130,7 +128,7 @@ def _prepare_line(kind: str, content: str, filename: str) -> SessionLine:
 
 
 def _prepare_hunk(hunk: Hunk) -> PreparedHunk:
-    lines = [_prepare_line(line.kind, line.content, hunk.path) for line in hunk.lines]
+    lines = [_prepare_line(line.kind, line.content) for line in hunk.lines]
     return PreparedHunk(hunk=hunk, lines=lines)
 
 
