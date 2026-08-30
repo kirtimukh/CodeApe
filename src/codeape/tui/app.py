@@ -97,7 +97,7 @@ class CodeApeApp(App):
         yield Footer()
 
     def _refresh_view(self) -> None:
-        self.query_one(StatusBar).refresh()
+        self.query_one(StatusBar).refresh(layout=True)
         canvas = self.query_one(TypingCanvas)
         canvas.bump()
         canvas.refresh()
@@ -105,6 +105,8 @@ class CodeApeApp(App):
             self.session.persist()
 
     def on_key(self, event: Key) -> None:
+        if self.screen.is_modal:
+            return
         if event.key in self._BOUND_KEYS:
             return
         if event.key == "enter":

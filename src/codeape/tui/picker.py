@@ -135,6 +135,10 @@ class LessonSwitcher(ModalScreen[str | None]):
                     id=row.sha,
                 )
             )
+        if visible:
+            current = next((i for i, row in enumerate(visible) if row.current), 0)
+            listing.highlighted = current
+        listing.focus()
 
     def action_page_next(self) -> None:
         _, _, pages = paginate(self.rows, self.page)
