@@ -3,13 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from codeape.apply import (
-    apply_attempt,
-    apply_hunks,
-    delete_file,
-    snapshot_attempt,
-    write_file,
-)
+from codeape.apply import apply_hunks, delete_file, write_file
 from codeape.diff_engine import DiffLine, Hunk, commit_hunks
 from codeape.history import (
     checkout_parent,
@@ -83,27 +77,11 @@ class PreparedHunk:
                 return i
         return None
 
-    def _first_user_typed(self) -> int | None:
-        for i, line in enumerate(self.lines):
-            if line.skip:
-                continue
-            if line.kind == "ADD" and line.typing and line.col > 0:
-                return i
-            if line.kind == "DEL" and line.display and line.remaining < len(
-                line.display
-            ):
-                return i
-        return None
-
-    def apply_frontier(self) -> None:
-        typed_at = self._first_user_typed()
-        if typed_at is None:
-            return
-        for i, line in enumerate(self.lines):
-            if i >= typed_at:
-                break
-            if line.kind == "ADD" and not line.typing:
-                line.entered = True
+    def next_typable(self, after: int) -> int | None:
+        nxt = self.next_incomplete(after)
+        if nxt is None:
+            return self.first_incomplete()
+        return nxt
 
 
 @dataclass
@@ -200,7 +178,6 @@ class Session:
         self._hunks: list[Hunk] = []
         self._prepared: list[PreparedHunk] = []
         self._parent_files: dict[str, list[str] | None] = {}
-        self._added_files: dict[str, list[str]] = {}
         self._done_set: set[int] = set()
         self._cursors: dict[int, int] = {}
         self._file_cursor: dict[str, int] = {}
@@ -224,7 +201,6 @@ class Session:
         if not self.done and self.progress.current_target:
             self._materialize_in_progress()
             self._snapshot_typing()
-            self._att.patch = snapshot_attempt(self.paths.workspace)
         self.progress.save(self.paths.progress_file)
 
     def _save(self) -> None:
@@ -252,17 +228,6 @@ class Session:
             )
         return self.progress.attempts[target]
 
-    def _line_offset(self, hunk_i: int, line_i: int) -> tuple[int, int | None]:
-        if not (0 <= hunk_i < len(self._prepared)):
-            return 0, None
-        lines = self._prepared[hunk_i].lines
-        if not (0 <= line_i < len(lines)):
-            return 0, None
-        line = lines[line_i]
-        if line.kind == "DEL":
-            return line.col, line.remaining
-        return line.col, None
-
     def _snapshot_typing(self) -> None:
         if self.done or self.progress.current_target is None:
             return
@@ -272,13 +237,8 @@ class Session:
         for hunk_i, line_i in sorted(self._cursors.items()):
             if hunk_i in self._done_set or not (0 <= hunk_i < len(self._prepared)):
                 continue
-            col, remaining = self._line_offset(hunk_i, line_i)
-            cursors.append(
-                HunkCursor(hunk=hunk_i, line=line_i, col=col, remaining=remaining)
-            )
+            cursors.append(HunkCursor(hunk=hunk_i, line=line_i))
         current.cursors = cursors
-        current.line = self._line_i
-        current.col, current.remaining = self._line_offset(current.hunk, self._line_i)
         current.lines = self._snapshot_lines()
 
     def _snapshot_lines(self) -> list[LineState]:
@@ -305,13 +265,10 @@ class Session:
                 )
         return saved
 
-    def _restore_line_progress(self) -> bool:
+    def _restore_line_progress(self) -> None:
         if self.progress.current_target is None:
-            return False
-        states = self._att.lines
-        if not states:
-            return False
-        for state in states:
+            return
+        for state in self._att.lines:
             if state.hunk in self._done_set or not (
                 0 <= state.hunk < len(self._prepared)
             ):
@@ -331,41 +288,19 @@ class Session:
                         max(state.remaining, 0), len(line.display)
                     )
                 line.entered = state.entered
-        return True
-
-    def _apply_cursor_offset(self, hunk_i: int, line_i: int, cursor: HunkCursor) -> None:
-        lines = self._prepared[hunk_i].lines
-        if not (0 <= line_i < len(lines)):
-            return
-        line = lines[line_i]
-        if line.kind == "ADD":
-            line.col = min(max(cursor.col, 0), len(line.typing))
-        elif line.kind == "DEL" and cursor.remaining is not None:
-            line.remaining = min(max(cursor.remaining, 0), len(line.display))
 
     def _restore_saved_cursors(self) -> None:
         if self.progress.current_target is None:
             return
         current = self._att
-        positions = {cursor.hunk: cursor for cursor in current.cursors}
-        if current.hunk not in positions and (
-            current.line or current.col or current.remaining is not None
-        ):
-            positions[current.hunk] = HunkCursor(
-                hunk=current.hunk,
-                line=current.line,
-                col=current.col,
-                remaining=current.remaining,
-            )
-        for hunk_i, cursor in positions.items():
+        for cursor in current.cursors:
+            hunk_i = cursor.hunk
             if hunk_i in self._done_set or not (0 <= hunk_i < len(self._prepared)):
                 continue
             last = len(self._prepared[hunk_i].lines) - 1
             line_i = min(max(cursor.line, 0), max(last, 0))
             self._cursors[hunk_i] = line_i
             self._file_cursor[self._hunks[hunk_i].path] = hunk_i
-            if not current.lines:
-                self._apply_cursor_offset(hunk_i, line_i, cursor)
         if current.hunk in self._cursors:
             self._line_i = self._cursors[current.hunk]
 
@@ -386,7 +321,6 @@ class Session:
         self._hunks = commit_hunks(self.paths.mirror, self._parent_sha, sha)
         self._prepared = [_prepare_hunk(h) for h in self._hunks]
         self._parent_files = {}
-        self._added_files = {}
         self._cursors = {}
         self._file_cursor = {}
         self._done_set = {
@@ -398,41 +332,18 @@ class Session:
                 self._parent_files[hunk.path] = file_at(
                     self.paths.mirror, self._parent_sha, hunk.path
                 )
-            if (
-                self._parent_files[hunk.path] is None
-                and hunk.path not in self._added_files
-            ):
-                added = file_at(self.paths.mirror, sha, hunk.path)
-                if added is not None:
-                    self._added_files[hunk.path] = added
-        restored_lines = self._restore_line_progress()
+        self._restore_line_progress()
         if restore:
-            self._restore_workspace(from_lines=restored_lines)
+            self._restore_workspace()
         self._line_i = 0
         if self._hunks and 0 <= attempt.hunk < len(self._hunks):
             attempt.file = self._hunks[attempt.hunk].path
         self._restore_saved_cursors()
         self._skip_non_targets()
 
-    def _restore_workspace(self, *, from_lines: bool) -> None:
+    def _restore_workspace(self) -> None:
         checkout_parent(self.paths.workspace, self._parent_sha)
-        if from_lines:
-            self._materialize_in_progress()
-            return
-        applied = apply_attempt(self.paths.workspace, self._att.patch)
-        if not applied or not self._att.patch.strip():
-            self._restore_done_hunks()
-
-    def _restore_done_hunks(self) -> None:
-        by_path: dict[str, list[Hunk]] = {}
-        for i, hunk in enumerate(self._hunks):
-            if i in self._done_set:
-                by_path.setdefault(hunk.path, []).append(hunk)
-        for path, original in self._parent_files.items():
-            applied = by_path.get(path, [])
-            if not applied:
-                continue
-            self._write_path(path, original, applied)
+        self._materialize_in_progress()
 
     def _file_done(self, path: str) -> bool:
         return all(
@@ -500,8 +411,12 @@ class Session:
         return [
             path
             for path in self._file_paths()
-            if path in self._added_files or self._first_typable_hunk(path) is not None
+            if self._is_added_file(path)
+            or self._first_typable_hunk(path) is not None
         ]
+
+    def _is_added_file(self, path: str) -> bool:
+        return any(hunk.is_added_file for hunk in self._hunks if hunk.path == path)
 
     def _first_typable_hunk(self, path: str) -> int | None:
         for i, hunk in enumerate(self._hunks):
@@ -696,24 +611,17 @@ class Session:
             return None
         return lines[self._line_i]
 
-    def _finish_empty_add(self) -> None:
+    def _finish_line(self) -> None:
         line = self._current_line()
         if line is not None and line.kind == "ADD" and not line.typing:
             line.entered = True
+        self._after_line()
 
     def _after_line(self) -> None:
         if self.progress.current_target is None:
             return
-        hunk_i = self._att.hunk
-        prepared = self._prepared[hunk_i]
-        prepared.apply_frontier()
-        if prepared.all_complete():
-            self._complete_hunk()
-            self._advance_to_typable()
-            return
-        nxt = prepared.next_incomplete(self._line_i)
-        if nxt is None:
-            nxt = prepared.first_incomplete()
+        prepared = self._prepared[self._att.hunk]
+        nxt = prepared.next_typable(self._line_i)
         if nxt is None:
             self._complete_hunk()
             self._advance_to_typable()
@@ -726,7 +634,6 @@ class Session:
             return None
         hunk = self._hunks[hunk_i]
         prepared = self._prepared[hunk_i]
-        prepared.apply_frontier()
         partial: list[DiffLine] = []
         for i, (raw, sl) in enumerate(zip(hunk.lines, prepared.lines)):
             if sl.kind == "ADD":
@@ -786,8 +693,7 @@ class Session:
         if line is None or line.kind != "ADD":
             return
         if line.col >= len(line.typing):
-            self._finish_empty_add()
-            self._after_line()
+            self._finish_line()
 
     def on_backspace(self) -> None:
         line = self._current_line()
@@ -808,8 +714,7 @@ class Session:
         if line is None or line.kind != "ADD":
             return
         if line.col >= len(line.typing):
-            self._finish_empty_add()
-            self._after_line()
+            self._finish_line()
             return
         target = tab_target(line.typing, line.col)
         if target is None or target <= line.col:
@@ -818,8 +723,7 @@ class Session:
         line.col = target
         line.miss = False
         if line.col >= len(line.typing):
-            self._finish_empty_add()
-            self._after_line()
+            self._finish_line()
 
     def on_line_tab(self) -> None:
         line = self._current_line()
@@ -830,8 +734,7 @@ class Session:
             self.progress.stats.chars_assisted += remaining
             line.col = len(line.typing)
             line.miss = False
-        self._finish_empty_add()
-        self._after_line()
+        self._finish_line()
 
     def on_up(self) -> None:
         self._step_line(-1)

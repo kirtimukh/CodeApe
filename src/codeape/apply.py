@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from codeape.diff_engine import Hunk
-from codeape.history import GitError, git
 
 
 def apply_hunks(original: list[str] | None, hunks: list[Hunk]) -> list[str]:
@@ -53,18 +52,3 @@ def _prune_empty_dirs(root: Path, directory: Path) -> None:
     while directory != root and directory.is_dir() and not any(directory.iterdir()):
         directory.rmdir()
         directory = directory.parent
-
-
-def snapshot_attempt(workspace: Path) -> str:
-    git(["add", "-A"], cwd=workspace)
-    return git(["diff", "--cached"], cwd=workspace).stdout
-
-
-def apply_attempt(workspace: Path, patch: str) -> bool:
-    if not patch.strip():
-        return True
-    try:
-        git(["apply", "--whitespace=nowarn"], cwd=workspace, input_text=patch)
-    except GitError:
-        return False
-    return True

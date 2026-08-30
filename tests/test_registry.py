@@ -55,14 +55,13 @@ def test_progress_round_trip(tmp_path: Path):
     from codeape.progress import Attempt, HunkCursor, LineState, new_progress
 
     progress = new_progress("/repo", "aaa")
-    progress.attempts["aaa"].cursors = [HunkCursor(hunk=0, line=1, col=2)]
+    progress.attempts["aaa"].cursors = [HunkCursor(hunk=0, line=1)]
     progress.attempts["aaa"].lines = [
         LineState(hunk=0, line=1, col=2, entered=True)
     ]
     progress.attempts["bbb"] = Attempt(
         parent="aaa",
         target="bbb",
-        patch="diff --git a/x b/x\n",
         status="skipped",
         hunk=1,
         done_hunks=[0],
@@ -71,10 +70,43 @@ def test_progress_round_trip(tmp_path: Path):
     progress.save(path)
     loaded = Progress.load(path)
     assert loaded.current_target == "aaa"
-    assert loaded.attempts["aaa"].cursors[0].col == 2
+    assert loaded.attempts["aaa"].cursors[0].line == 1
+    assert loaded.attempts["aaa"].lines[0].col == 2
     assert loaded.attempts["aaa"].lines[0].entered is True
     assert loaded.attempts["bbb"].status == "skipped"
-    assert loaded.attempts["bbb"].patch.startswith("diff --git")
+
+
+def test_progress_loads_legacy_cursor_offsets(tmp_path: Path):
+    path = tmp_path / "progress.json"
+    path.write_text(
+        """
+{
+  "origin": "/repo",
+  "current_target": "aaa",
+  "attempts": {
+    "aaa": {
+      "parent": null,
+      "target": "aaa",
+      "status": "in_progress",
+      "file": "hello.py",
+      "hunk": 0,
+      "done_hunks": [],
+      "line": 1,
+      "col": 3,
+      "remaining": null,
+      "cursors": [{"hunk": 0, "line": 1, "col": 3, "remaining": null}]
+    }
+  },
+  "stats": {}
+}
+"""
+    )
+    loaded = Progress.load(path)
+    attempt = loaded.attempts["aaa"]
+    assert attempt.cursors[0].line == 1
+    assert attempt.lines[0].hunk == 0
+    assert attempt.lines[0].line == 1
+    assert attempt.lines[0].col == 3
 
 
 def test_paginate_clamps_and_slices():

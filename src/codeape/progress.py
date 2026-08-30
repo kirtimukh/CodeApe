@@ -13,8 +13,6 @@ STATUS_COMPLETED = "completed"
 class HunkCursor:
     hunk: int
     line: int
-    col: int = 0
-    remaining: int | None = None
 
 
 @dataclass
@@ -30,14 +28,10 @@ class LineState:
 class Attempt:
     parent: str | None
     target: str
-    patch: str = ""
     status: str = STATUS_IN_PROGRESS
     file: str = ""
     hunk: int = 0
     done_hunks: list[int] = field(default_factory=list)
-    line: int = 0
-    col: int = 0
-    remaining: int | None = None
     cursors: list[HunkCursor] = field(default_factory=list)
     lines: list[LineState] = field(default_factory=list)
 
@@ -65,14 +59,10 @@ class Progress:
                 sha: {
                     "parent": attempt.parent,
                     "target": attempt.target,
-                    "patch": attempt.patch,
                     "status": attempt.status,
                     "file": attempt.file,
                     "hunk": attempt.hunk,
                     "done_hunks": attempt.done_hunks,
-                    "line": attempt.line,
-                    "col": attempt.col,
-                    "remaining": attempt.remaining,
                     "cursors": [asdict(cursor) for cursor in attempt.cursors],
                     "lines": [asdict(line) for line in attempt.lines],
                 }
@@ -100,19 +90,25 @@ class Progress:
 
 
 def _load_attempt(sha: str, data: dict) -> Attempt:
+    cursors = _load_cursors(data)
+    if not cursors and (
+        data.get("line") or data.get("col") or data.get("remaining") is not None
+    ):
+        cursors = [
+            HunkCursor(hunk=int(data.get("hunk", 0)), line=int(data.get("line", 0)))
+        ]
+    lines = _load_lines(data)
+    if not lines:
+        lines = _lines_from_legacy(data)
     return Attempt(
         parent=data.get("parent"),
         target=data.get("target", sha),
-        patch=data.get("patch", ""),
         status=data.get("status", STATUS_IN_PROGRESS),
         file=data.get("file", ""),
         hunk=int(data.get("hunk", 0)),
         done_hunks=[int(i) for i in data.get("done_hunks", [])],
-        line=int(data.get("line", 0)),
-        col=int(data.get("col", 0)),
-        remaining=_load_remaining(data.get("remaining")),
-        cursors=_load_cursors(data),
-        lines=_load_lines(data),
+        cursors=cursors,
+        lines=lines,
     )
 
 
@@ -129,8 +125,6 @@ def _load_cursors(data: dict) -> list[HunkCursor]:
             HunkCursor(
                 hunk=int(item["hunk"]),
                 line=int(item.get("line", 0)),
-                col=int(item.get("col", 0)),
-                remaining=_load_remaining(item.get("remaining")),
             )
         )
     return cursors
@@ -149,6 +143,35 @@ def _load_lines(data: dict) -> list[LineState]:
             )
         )
     return lines
+
+
+def _lines_from_legacy(data: dict) -> list[LineState]:
+    lines: list[LineState] = []
+    seen: set[tuple[int, int]] = set()
+    for item in data.get("cursors") or []:
+        state = _line_from_legacy_item(item)
+        if state is None:
+            continue
+        seen.add((state.hunk, state.line))
+        lines.append(state)
+    if data.get("line") or data.get("col") or data.get("remaining") is not None:
+        state = _line_from_legacy_item(data)
+        if state is not None and (state.hunk, state.line) not in seen:
+            lines.append(state)
+    return lines
+
+
+def _line_from_legacy_item(item: dict) -> LineState | None:
+    col = int(item.get("col", 0))
+    remaining = _load_remaining(item.get("remaining"))
+    if col == 0 and remaining is None:
+        return None
+    return LineState(
+        hunk=int(item.get("hunk", 0)),
+        line=int(item.get("line", 0)),
+        col=col,
+        remaining=remaining,
+    )
 
 
 def new_progress(origin: str, first_target: str | None) -> Progress:

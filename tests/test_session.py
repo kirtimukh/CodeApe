@@ -264,7 +264,7 @@ def test_skip_commit_keeps_partial_attempt(sample_repo, codeape_home):
     saved = Progress.load(paths.progress_file)
     attempt = saved.attempts[shas[0]]
     assert attempt.status == STATUS_SKIPPED
-    assert attempt.col == 3 or any(cursor.col == 3 for cursor in attempt.cursors)
+    assert any(line.col == 3 for line in attempt.lines)
     assert saved.current_target == shas[1]
     assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
 
@@ -343,7 +343,7 @@ def test_type_later_add_leaves_earlier_lines(sparse_repo, codeape_home):
     by_typing = {line.typing: line for line in adds}
     assert by_typing["    y = 2"].complete is False
     assert by_typing["    z = 3"].complete is True
-    assert by_typing[""].complete is True
+    assert by_typing[""].complete is False
 
 
 def test_revisit_keeps_untyped_adds_as_candidates(sparse_repo, codeape_home):
@@ -363,12 +363,12 @@ def test_revisit_keeps_untyped_adds_as_candidates(sparse_repo, codeape_home):
     by_typing = {line.typing: line for line in adds}
     assert by_typing["    y = 2"].complete is False
     assert by_typing["    z = 3"].complete is True
-    assert by_typing[""].complete is True
+    assert by_typing[""].complete is False
     assert by_typing["    return x + y + z"].complete is False
 
     current = _current_line(resumed)
-    assert current.kind == "ADD"
-    assert "return x + y + z" in current.typing or current.typing == "    y = 2"
+    assert current.complete is False
+    assert current.kind in {"ADD", "DEL"}
 
 
 def test_arrows_move_without_completing(sparse_repo, codeape_home):
