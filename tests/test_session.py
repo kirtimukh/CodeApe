@@ -118,13 +118,12 @@ def test_line_tab_completes_rest_of_line(sample_repo, codeape_home):
     assert session.progress.stats.chars_assisted == len("def hello():")
 
 
-def test_added_files_exist_when_commit_starts(import_added_repo, codeape_home):
+def test_added_files_are_absent_until_typed(import_added_repo, codeape_home):
     session, paths = _open_session(import_added_repo)
     session.skip_commit()
 
-    util = (paths.workspace / "util.py").read_text()
+    assert not (paths.workspace / "util.py").exists()
     hello = (paths.workspace / "hello.py").read_text()
-    assert util == "def answer():\n    return 2\n"
     assert "from util import answer" not in hello
     assert hello == "def hello():\n    return 1\n"
     assert session.done is False
@@ -285,7 +284,7 @@ def test_skip_last_lesson_stays_resumable(sample_repo, codeape_home):
     assert resumed.progress.current_target in saved.attempts
 
 
-def test_persist_keeps_added_file_preview(import_added_repo, codeape_home):
+def test_persist_writes_only_typed_added_lines(import_added_repo, codeape_home):
     session, paths = _open_session(import_added_repo)
     session.skip_commit()
     if session.view().file != "util.py":
@@ -295,10 +294,10 @@ def test_persist_keeps_added_file_preview(import_added_repo, codeape_home):
     for ch in line.typing[:3]:
         session.on_char(ch)
     session.persist()
-    assert (paths.workspace / "util.py").read_text() == "def answer():\n    return 2\n"
+    assert (paths.workspace / "util.py").read_text() == "def\n"
 
     resumed = Session(paths, Progress.load(paths.progress_file))
-    assert (paths.workspace / "util.py").read_text() == "def answer():\n    return 2\n"
+    assert (paths.workspace / "util.py").read_text() == "def\n"
     assert _current_line(resumed).col == 3
 
 
@@ -316,6 +315,92 @@ def test_completed_lesson_ignores_typing(sample_repo, codeape_home):
     session.skip_hunk()
     assert session.progress.stats.chars_typed == typed
     assert session.view().sha == shas[0]
+
+
+def _move_to_typing(session: Session, snippet: str) -> None:
+    for _ in range(40):
+        current = _current_line(session)
+        if current.kind == "ADD" and snippet in current.typing:
+            return
+        session.on_down()
+    raise AssertionError(f"no ADD line containing {snippet!r}")
+
+
+def test_type_later_add_leaves_earlier_lines(sparse_repo, codeape_home):
+    session, paths = _open_session(sparse_repo)
+    session.skip_commit()
+    _move_to_typing(session, "z = 3")
+    session.on_line_tab()
+    session.persist()
+
+    text = (paths.workspace / "hello.py").read_text()
+    assert "    z = 3\n" in text
+    assert "    y = 2\n" not in text
+    assert "    return x\n" in text
+    assert "    return x + y + z\n" not in text
+
+    adds = [line for line in session.view().lines if line.kind == "ADD"]
+    by_typing = {line.typing: line for line in adds}
+    assert by_typing["    y = 2"].complete is False
+    assert by_typing["    z = 3"].complete is True
+    assert by_typing[""].complete is True
+
+
+def test_revisit_keeps_untyped_adds_as_candidates(sparse_repo, codeape_home):
+    session, paths = _open_session(sparse_repo)
+    session.skip_commit()
+    _move_to_typing(session, "z = 3")
+    session.on_line_tab()
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    text = (paths.workspace / "hello.py").read_text()
+    assert "    z = 3\n" in text
+    assert "    y = 2\n" not in text
+    assert "    return x\n" in text
+
+    adds = [line for line in resumed.view().lines if line.kind == "ADD"]
+    by_typing = {line.typing: line for line in adds}
+    assert by_typing["    y = 2"].complete is False
+    assert by_typing["    z = 3"].complete is True
+    assert by_typing[""].complete is True
+    assert by_typing["    return x + y + z"].complete is False
+
+    current = _current_line(resumed)
+    assert current.kind == "ADD"
+    assert "return x + y + z" in current.typing or current.typing == "    y = 2"
+
+
+def test_arrows_move_without_completing(sparse_repo, codeape_home):
+    session, _ = _open_session(sparse_repo)
+    session.skip_commit()
+    first = _current_line(session)
+    session.on_down()
+    second = _current_line(session)
+    assert second.typing != first.typing or second.kind != first.kind
+    assert first.complete is False
+    session.on_up()
+    assert _current_line(session).typing == first.typing
+    assert _current_line(session).complete is False
+
+
+def test_resume_keeps_later_identical_add(dup_add_repo, codeape_home):
+    session, paths = _open_session(dup_add_repo)
+    session.skip_commit()
+    _move_to_typing(session, "pass")
+    session.on_down()
+    current = _current_line(session)
+    assert current.typing == "    pass"
+    session.on_line_tab()
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    adds = [line for line in resumed.view().lines if line.kind == "ADD"]
+    assert [line.typing for line in adds] == ["    pass", "    pass"]
+    assert adds[0].complete is False
+    assert adds[1].complete is True
+    text = (paths.workspace / "hello.py").read_text()
+    assert text.count("    pass\n") == 1
 
 
 def test_switch_lesson_restores_attempt(sample_repo, codeape_home):

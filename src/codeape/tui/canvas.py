@@ -131,10 +131,9 @@ class TypingCanvas(VerticalScroll):
         span: tuple[int, int] | None = None
         y = 0
         for i, line in enumerate(view.lines):
-            past = current_i is None or i < current_i
             row = Text()
             row.append(f"{line.gutter} ", style=self._gutter_style(line))
-            row.append_text(self._body(line, past=past))
+            row.append_text(self._body(line))
             height = line_visual_height(row.plain, width)
             if i == current_i:
                 span = (y, height)
@@ -150,18 +149,23 @@ class TypingCanvas(VerticalScroll):
             return pal.GUTTER_ADD
         return pal.GUTTER_CTX
 
-    def _body(self, line: ViewLine, *, past: bool) -> Text:
+    def _body(self, line: ViewLine) -> Text:
         if line.kind == "CTX" or line.skip:
             return Text(line.display, style=pal.CTX)
         if line.kind == "DEL":
-            return self._del_body(line, past=past)
-        return self._add_body(line, past=past)
+            return self._del_body(line)
+        return self._add_body(line)
 
-    def _del_body(self, line: ViewLine, *, past: bool) -> Text:
+    def _del_body(self, line: ViewLine) -> Text:
         text = Text()
         if not line.is_current:
-            style = pal.DEL_EATEN if past else pal.DEL
-            text.append(line.display, style=style)
+            if line.complete:
+                text.append(line.display, style=pal.DEL_EATEN)
+            elif 0 < line.remaining < len(line.display):
+                text.append(line.display[: line.remaining], style=pal.DEL)
+                text.append(line.display[line.remaining :], style=pal.DEL_EATEN)
+            else:
+                text.append(line.display, style=pal.DEL)
             return text
         still = line.display[: line.remaining]
         eaten = line.display[line.remaining :]
@@ -175,11 +179,16 @@ class TypingCanvas(VerticalScroll):
             text.append(eaten, style=pal.DEL_EATEN)
         return text
 
-    def _add_body(self, line: ViewLine, *, past: bool) -> Text:
+    def _add_body(self, line: ViewLine) -> Text:
         text = Text()
         if not line.is_current:
-            style = pal.ADD_TYPED if past else pal.ADD_UNTYPED
-            text.append(line.typing, style=style)
+            if line.complete:
+                text.append(line.typing, style=pal.ADD_TYPED)
+            elif line.col > 0:
+                text.append(line.typing[: line.col], style=pal.ADD_TYPED)
+                text.append(line.typing[line.col :], style=pal.ADD_UNTYPED)
+            else:
+                text.append(line.typing, style=pal.ADD_UNTYPED)
             if line.comment_suffix:
                 text.append(line.comment_suffix, style=pal.COMMENT)
             return text

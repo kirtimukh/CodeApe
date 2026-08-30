@@ -18,6 +18,15 @@ class HunkCursor:
 
 
 @dataclass
+class LineState:
+    hunk: int
+    line: int
+    col: int = 0
+    remaining: int | None = None
+    entered: bool = False
+
+
+@dataclass
 class Attempt:
     parent: str | None
     target: str
@@ -30,6 +39,7 @@ class Attempt:
     col: int = 0
     remaining: int | None = None
     cursors: list[HunkCursor] = field(default_factory=list)
+    lines: list[LineState] = field(default_factory=list)
 
 
 @dataclass
@@ -64,6 +74,7 @@ class Progress:
                     "col": attempt.col,
                     "remaining": attempt.remaining,
                     "cursors": [asdict(cursor) for cursor in attempt.cursors],
+                    "lines": [asdict(line) for line in attempt.lines],
                 }
                 for sha, attempt in self.attempts.items()
             },
@@ -101,6 +112,7 @@ def _load_attempt(sha: str, data: dict) -> Attempt:
         col=int(data.get("col", 0)),
         remaining=_load_remaining(data.get("remaining")),
         cursors=_load_cursors(data),
+        lines=_load_lines(data),
     )
 
 
@@ -122,6 +134,21 @@ def _load_cursors(data: dict) -> list[HunkCursor]:
             )
         )
     return cursors
+
+
+def _load_lines(data: dict) -> list[LineState]:
+    lines: list[LineState] = []
+    for item in data.get("lines") or []:
+        lines.append(
+            LineState(
+                hunk=int(item["hunk"]),
+                line=int(item.get("line", 0)),
+                col=int(item.get("col", 0)),
+                remaining=_load_remaining(item.get("remaining")),
+                entered=bool(item.get("entered", False)),
+            )
+        )
+    return lines
 
 
 def new_progress(origin: str, first_target: str | None) -> Progress:

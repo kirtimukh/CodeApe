@@ -101,6 +101,41 @@ def mixed_nav_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def sparse_repo(tmp_path: Path) -> Path:
+    """Parent → target with a blank ADD, two new lines, and a kept delete."""
+    repo = tmp_path / "origin"
+    init_git(repo)
+    commit_file(
+        repo,
+        "hello.py",
+        "def foo():\n    x = 1\n    return x\n",
+        "add foo",
+    )
+    commit_file(
+        repo,
+        "hello.py",
+        "def foo():\n    x = 1\n\n    y = 2\n    z = 3\n    return x + y + z\n",
+        "expand foo",
+    )
+    return repo
+
+
+@pytest.fixture
+def dup_add_repo(tmp_path: Path) -> Path:
+    """Parent → target with two identical ADD lines after a distinct one."""
+    repo = tmp_path / "origin"
+    init_git(repo)
+    commit_file(repo, "hello.py", "def foo():\n    x = 1\n", "add foo")
+    commit_file(
+        repo,
+        "hello.py",
+        "def foo():\n    x = 1\n    pass\n    pass\n",
+        "add two pass",
+    )
+    return repo
+
+
+@pytest.fixture
 def codeape_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "codeape-home"
     monkeypatch.setenv("CODEAPE_HOME", str(home))

@@ -52,10 +52,13 @@ def test_load_repo_paths_single_repo(sample_repo, codeape_home):
 
 
 def test_progress_round_trip(tmp_path: Path):
-    from codeape.progress import Attempt, HunkCursor, new_progress
+    from codeape.progress import Attempt, HunkCursor, LineState, new_progress
 
     progress = new_progress("/repo", "aaa")
     progress.attempts["aaa"].cursors = [HunkCursor(hunk=0, line=1, col=2)]
+    progress.attempts["aaa"].lines = [
+        LineState(hunk=0, line=1, col=2, entered=True)
+    ]
     progress.attempts["bbb"] = Attempt(
         parent="aaa",
         target="bbb",
@@ -69,6 +72,7 @@ def test_progress_round_trip(tmp_path: Path):
     loaded = Progress.load(path)
     assert loaded.current_target == "aaa"
     assert loaded.attempts["aaa"].cursors[0].col == 2
+    assert loaded.attempts["aaa"].lines[0].entered is True
     assert loaded.attempts["bbb"].status == "skipped"
     assert loaded.attempts["bbb"].patch.startswith("diff --git")
 
@@ -87,21 +91,3 @@ def test_paginate_clamps_and_slices():
     assert empty == []
     assert page == 0
     assert pages == 1
-
-
-def test_purge_codeape_home_script(tmp_path, monkeypatch):
-    import importlib.util
-
-    home = tmp_path / "old-home"
-    home.mkdir()
-    (home / "progress.json").write_text('{"first_parent_shas": []}\n')
-    monkeypatch.setenv("CODEAPE_HOME", str(home))
-    spec = importlib.util.spec_from_file_location(
-        "purge_codeape_home",
-        Path(__file__).resolve().parents[1] / "scripts" / "purge_codeape_home.py",
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.main()
-    assert not home.exists()

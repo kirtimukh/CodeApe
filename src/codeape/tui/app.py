@@ -81,6 +81,8 @@ class CodeApeApp(App):
         Binding("ctrl+d", "accept_del", "Accept del"),
         Binding("shift+right", "next_file", "Next file", priority=True),
         Binding("shift+left", "prev_file", "Prev file", priority=True),
+        Binding("up", "line_up", "Up", show=False, priority=True),
+        Binding("down", "line_down", "Down", show=False, priority=True),
         Binding("tab", "tab", "Tab", show=False, priority=True),
         Binding("shift+tab", "line_tab", "Line tab", show=False, priority=True),
     ]
@@ -159,6 +161,33 @@ class CodeApeApp(App):
     def action_prev_file(self) -> None:
         self.session.prev_file()
         self._refresh_view()
+
+    def action_line_up(self) -> None:
+        if self._forward_picker_line(-1):
+            return
+        self.session.on_up()
+        self._refresh_view()
+
+    def action_line_down(self) -> None:
+        if self._forward_picker_line(1):
+            return
+        self.session.on_down()
+        self._refresh_view()
+
+    def _forward_picker_line(self, delta: int) -> bool:
+        if not self.screen.is_modal:
+            return False
+        from textual.widgets import OptionList
+
+        listing = self.screen.query(OptionList)
+        if not listing:
+            return False
+        widget = listing.first()
+        if delta < 0:
+            widget.action_cursor_up()
+        else:
+            widget.action_cursor_down()
+        return True
 
     def action_quit(self) -> None:
         self.session.persist()
