@@ -195,6 +195,19 @@ def test_navigate_only_typable_and_new_files(mixed_nav_repo, codeape_home):
     assert seen == {"hello.py", "notes.py", "util.py"}
 
 
+def test_untouched_indent_is_not_persisted(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
+    _type_line(session, "def hello():")
+    current = _current_line(session)
+    assert current.col == 4
+    assert current.typing[current.col :].startswith("return")
+    session.persist()
+
+    saved = Progress.load(paths.progress_file).attempts[shas[0]]
+    assert [line.col for line in saved.lines] == [len("def hello():")]
+
+
 def test_persist_remembers_in_progress_typing(sample_repo, codeape_home):
     session, paths = _open_session(sample_repo)
     line = _current_line(session)

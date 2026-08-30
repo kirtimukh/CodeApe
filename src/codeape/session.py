@@ -37,6 +37,11 @@ class SessionLine:
     remaining: int = 0
     entered: bool = False
 
+    def cursor_col(self) -> int:
+        if self.kind != "ADD" or self.col > 0:
+            return self.col
+        return leading_indent(self.typing)
+
 
 @dataclass
 class PreparedHunk:
@@ -280,7 +285,11 @@ class Session:
             if line.skip:
                 continue
             if line.kind == "ADD":
-                line.col = min(max(state.col, 0), len(line.typing))
+                col = min(max(state.col, 0), len(line.typing))
+                indent = leading_indent(line.typing)
+                if 0 < col <= indent < len(line.typing):
+                    col = 0
+                line.col = col
                 line.entered = state.entered
             elif line.kind == "DEL":
                 if state.remaining is not None:
@@ -334,16 +343,13 @@ class Session:
                 )
         self._restore_line_progress()
         if restore:
-            self._restore_workspace()
+            checkout_parent(self.paths.workspace, self._parent_sha)
+            self._materialize_in_progress()
         self._line_i = 0
         if self._hunks and 0 <= attempt.hunk < len(self._hunks):
             attempt.file = self._hunks[attempt.hunk].path
         self._restore_saved_cursors()
         self._skip_non_targets()
-
-    def _restore_workspace(self) -> None:
-        checkout_parent(self.paths.workspace, self._parent_sha)
-        self._materialize_in_progress()
 
     def _file_done(self, path: str) -> bool:
         return all(
@@ -479,23 +485,6 @@ class Session:
         lines = self._prepared[self._att.hunk].lines
         while self._line_i < len(lines) and lines[self._line_i].skip:
             self._line_i += 1
-        self._place_at_code_start()
-
-    def _place_at_code_start(self) -> None:
-        line = self._current_line()
-        if line is None or line.kind != "ADD" or line.col != 0:
-            return
-        indent = leading_indent(line.typing)
-        if indent:
-            line.col = indent
-
-    def _clear_untouched_indent(self) -> None:
-        line = self._current_line()
-        if line is None or line.kind != "ADD":
-            return
-        indent = leading_indent(line.typing)
-        if indent and line.col == indent:
-            line.col = 0
 
     def _hunk_done(self) -> bool:
         if self.progress.current_target is None:
@@ -613,8 +602,11 @@ class Session:
 
     def _finish_line(self) -> None:
         line = self._current_line()
-        if line is not None and line.kind == "ADD" and not line.typing:
-            line.entered = True
+        if line is not None and line.kind == "ADD":
+            if not line.typing:
+                line.entered = True
+            elif line.col == 0 and line.cursor_col() >= len(line.typing):
+                line.col = len(line.typing)
         self._after_line()
 
     def _after_line(self) -> None:
@@ -627,7 +619,6 @@ class Session:
             self._advance_to_typable()
             return
         self._line_i = nxt
-        self._place_at_code_start()
 
     def _partial_hunk(self, hunk_i: int) -> Hunk | None:
         if not (0 <= hunk_i < len(self._hunks)) or hunk_i in self._done_set:
@@ -677,11 +668,12 @@ class Session:
         line = self._current_line()
         if line is None or line.kind != "ADD":
             return
-        if line.col >= len(line.typing):
+        start = line.cursor_col()
+        if start >= len(line.typing):
             return
-        expected = line.typing[line.col]
+        expected = line.typing[start]
         if ch == expected:
-            line.col += 1
+            line.col = start + 1
             line.miss = False
             self.progress.stats.chars_typed += 1
         else:
@@ -692,7 +684,7 @@ class Session:
         line = self._current_line()
         if line is None or line.kind != "ADD":
             return
-        if line.col >= len(line.typing):
+        if line.cursor_col() >= len(line.typing):
             self._finish_line()
 
     def on_backspace(self) -> None:
@@ -702,6 +694,9 @@ class Session:
         if line.kind == "ADD":
             if line.col > 0:
                 line.col -= 1
+                indent = leading_indent(line.typing)
+                if line.col <= indent < len(line.typing):
+                    line.col = 0
                 line.miss = False
             return
         if line.kind == "DEL" and line.remaining > 0:
@@ -713,13 +708,14 @@ class Session:
         line = self._current_line()
         if line is None or line.kind != "ADD":
             return
-        if line.col >= len(line.typing):
+        start = line.cursor_col()
+        if start >= len(line.typing):
             self._finish_line()
             return
-        target = tab_target(line.typing, line.col)
-        if target is None or target <= line.col:
+        target = tab_target(line.typing, start)
+        if target is None or target <= start:
             return
-        self.progress.stats.chars_assisted += target - line.col
+        self.progress.stats.chars_assisted += target - start
         line.col = target
         line.miss = False
         if line.col >= len(line.typing):
@@ -729,7 +725,8 @@ class Session:
         line = self._current_line()
         if line is None or line.kind != "ADD":
             return
-        remaining = len(line.typing) - line.col
+        start = line.cursor_col()
+        remaining = len(line.typing) - start
         if remaining > 0:
             self.progress.stats.chars_assisted += remaining
             line.col = len(line.typing)
@@ -752,9 +749,7 @@ class Session:
         dest = self._line_i + delta
         while 0 <= dest < len(lines):
             if not lines[dest].skip:
-                self._clear_untouched_indent()
                 self._line_i = dest
-                self._place_at_code_start()
                 return
             dest += delta
 
@@ -894,7 +889,7 @@ class Session:
                         display=line.display,
                         typing=line.typing,
                         comment_suffix=line.comment_suffix,
-                        col=line.col,
+                        col=line.cursor_col() if is_current else line.col,
                         remaining=line.remaining,
                         skip=line.skip,
                         is_current=is_current,
