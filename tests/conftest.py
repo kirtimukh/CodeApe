@@ -101,6 +101,22 @@ def mixed_nav_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def md_and_py_repo(tmp_path: Path) -> Path:
+    """Parent adds a .py and a .md file; the next commit edits both."""
+    repo = tmp_path / "origin"
+    init_git(repo)
+    (repo / "hello.py").write_text("def hello():\n    return 1\n")
+    (repo / "README.md").write_text("# Title\n\nHello.\n")
+    git(repo, "add", "hello.py", "README.md")
+    git(repo, "commit", "-m", "add py and md")
+    (repo / "hello.py").write_text("def hello():\n    return 2\n")
+    (repo / "README.md").write_text("# Title\n\nHello world.\n")
+    git(repo, "add", "hello.py", "README.md")
+    git(repo, "commit", "-m", "edit py and md")
+    return repo
+
+
+@pytest.fixture
 def sparse_repo(tmp_path: Path) -> Path:
     """Parent → target with a blank ADD, two new lines, and a kept delete."""
     repo = tmp_path / "origin"

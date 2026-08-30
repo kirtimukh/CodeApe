@@ -336,6 +336,8 @@ class Session:
             i for i in attempt.done_hunks if 0 <= i < len(self._hunks)
         }
         self._sync_done()
+        for hunk_i in self._done_set:
+            self._fill_completed_hunk(hunk_i)
         for hunk in self._hunks:
             if hunk.path not in self._parent_files:
                 self._parent_files[hunk.path] = file_at(
@@ -404,6 +406,7 @@ class Session:
                 continue
             self._done_set.add(i)
             self._cursors.pop(i, None)
+            self._fill_completed_hunk(i)
             dirty.add(self._hunks[i].path)
         for path in dirty:
             self._apply_file(path)
@@ -413,16 +416,19 @@ class Session:
         return list(dict.fromkeys(hunk.path for hunk in self._hunks))
 
     def _nav_files(self) -> list[str]:
-        """Files the user can switch to: still-typable changes, plus new files."""
-        return [
-            path
-            for path in self._file_paths()
-            if self._is_added_file(path)
-            or self._first_typable_hunk(path) is not None
-        ]
+        """Every file in the current lesson, including ones already finished."""
+        return self._file_paths()
 
-    def _is_added_file(self, path: str) -> bool:
-        return any(hunk.is_added_file for hunk in self._hunks if hunk.path == path)
+    def _fill_completed_hunk(self, hunk_i: int) -> None:
+        if not (0 <= hunk_i < len(self._prepared)):
+            return
+        for line in self._prepared[hunk_i].lines:
+            if line.kind == "ADD":
+                if line.typing:
+                    line.col = len(line.typing)
+                line.entered = True
+            elif line.kind == "DEL":
+                line.remaining = 0
 
     def _first_typable_hunk(self, path: str) -> int | None:
         for i, hunk in enumerate(self._hunks):
@@ -539,7 +545,9 @@ class Session:
     def _is_readonly(self) -> bool:
         if self.done or self.progress.current_target is None:
             return True
-        return self._att.status == STATUS_COMPLETED
+        if self._att.status == STATUS_COMPLETED:
+            return True
+        return self._att.hunk in self._done_set
 
     def _open_lesson(self, target: str, *, auto_advance: bool = True) -> None:
         self.progress.current_target = target
@@ -877,6 +885,7 @@ class Session:
             and hunk_i < len(self._prepared)
         ):
             prepared = self._prepared[hunk_i]
+            hunk_complete = hunk_i in self._done_set
             for i, line in enumerate(prepared.lines):
                 gutter = {"ADD": "+", "DEL": "-", "CTX": " "}.get(line.kind, " ")
                 is_current = i == self._line_i
@@ -894,7 +903,7 @@ class Session:
                         skip=line.skip,
                         is_current=is_current,
                         miss=line.miss,
-                        complete=prepared.line_complete(i),
+                        complete=hunk_complete or prepared.line_complete(i),
                     )
                 )
         typed = self.progress.stats.chars_typed

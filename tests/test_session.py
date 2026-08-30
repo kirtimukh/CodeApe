@@ -176,7 +176,7 @@ def test_navigate_files_wraps(import_added_repo, codeape_home):
     assert set(seen) == {"hello.py", "util.py"}
 
 
-def test_navigate_only_typable_and_new_files(mixed_nav_repo, codeape_home):
+def test_navigate_all_lesson_files(mixed_nav_repo, codeape_home):
     session, _ = _open_session(mixed_nav_repo)
     session.skip_commit()
     session.skip_commit()
@@ -193,6 +193,54 @@ def test_navigate_only_typable_and_new_files(mixed_nav_repo, codeape_home):
     session.next_file()
     seen.add(session.view().file)
     assert seen == {"hello.py", "notes.py", "util.py"}
+
+
+def _finish_current_file(session: Session) -> str:
+    path = session.view().file
+    for _ in range(80):
+        if session.view().file != path or session.done:
+            return path
+        current = _current_line(session)
+        if current.kind == "ADD":
+            session.on_line_tab()
+        elif current.kind == "DEL":
+            session.on_accept_del()
+        else:
+            session.on_down()
+    raise AssertionError(f"could not finish {path}")
+
+
+def test_completed_file_stays_navigable(mixed_nav_repo, codeape_home):
+    session, _ = _open_session(mixed_nav_repo)
+    session.skip_commit()
+    session.skip_commit()
+
+    lesson_files = {"hello.py", "notes.py", "util.py"}
+    assert set(session.view().files) == lesson_files
+    finished = _finish_current_file(session)
+    assert finished in lesson_files
+    assert session.done is False
+    assert set(session.view().files) == lesson_files
+    assert session.view().file_total == 3
+    assert session.view().file != finished
+
+    seen = {session.view().file}
+    session.next_file()
+    seen.add(session.view().file)
+    session.next_file()
+    seen.add(session.view().file)
+    session.next_file()
+    seen.add(session.view().file)
+    assert seen == lesson_files
+
+    while session.view().file != finished:
+        session.next_file()
+    assert session.view().file == finished
+    assert session.view().lines
+    assert all(
+        line.complete or line.skip or line.kind == "CTX"
+        for line in session.view().lines
+    )
 
 
 def test_untouched_indent_is_not_persisted(sample_repo, codeape_home):
@@ -414,6 +462,91 @@ def test_resume_keeps_later_identical_add(dup_add_repo, codeape_home):
     assert adds[1].complete is True
     text = (paths.workspace / "hello.py").read_text()
     assert text.count("    pass\n") == 1
+
+
+def test_persist_completed_file_stays_in_ui(mixed_nav_repo, codeape_home):
+    session, paths = _open_session(mixed_nav_repo)
+    session.skip_commit()
+    session.skip_commit()
+
+    finished = _finish_current_file(session)
+    remaining = session.view().file
+    assert remaining != finished
+    session.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    assert set(resumed.view().files) == {"hello.py", "notes.py", "util.py"}
+    assert resumed.view().file == remaining
+    seen = {resumed.view().file}
+    resumed.next_file()
+    seen.add(resumed.view().file)
+    resumed.next_file()
+    seen.add(resumed.view().file)
+    assert seen == {"hello.py", "notes.py", "util.py"}
+
+    while resumed.view().file != finished:
+        resumed.next_file()
+    assert all(
+        line.complete or line.skip or line.kind == "CTX"
+        for line in resumed.view().lines
+    )
+
+
+def _type_add_prefix(session: Session, n: int) -> int:
+    for _ in range(20):
+        current = _current_line(session)
+        if current.kind == "ADD" and current.typing:
+            for ch in current.typing[:n]:
+                session.on_char(ch)
+            return _current_line(session).col
+        if current.kind == "DEL":
+            session.on_accept_del()
+            continue
+        session.on_down()
+    raise AssertionError("no ADD line to type")
+
+
+def test_md_and_py_partial_and_complete_restore(md_and_py_repo, codeape_home):
+    session, paths = _open_session(md_and_py_repo)
+    session.skip_commit()
+
+    assert set(session.view().files) == {"hello.py", "README.md"}
+    first = session.view().file
+    first_col = _type_add_prefix(session, 3)
+    session.persist()
+
+    mid = Session(paths, Progress.load(paths.progress_file))
+    assert mid.view().file == first
+    assert _current_line(mid).col == first_col
+    assert _current_line(mid).kind == "ADD"
+
+    finished = _finish_current_file(mid)
+    other = "README.md" if finished == "hello.py" else "hello.py"
+    assert mid.view().file == other
+    other_col = _type_add_prefix(mid, 2)
+    mid.persist()
+
+    resumed = Session(paths, Progress.load(paths.progress_file))
+    assert set(resumed.view().files) == {"hello.py", "README.md"}
+    assert resumed.view().file == other
+    assert _current_line(resumed).col == other_col
+    assert _current_line(resumed).kind == "ADD"
+
+    resumed.next_file()
+    assert resumed.view().file == finished
+    assert resumed.view().lines
+    assert all(
+        line.complete or line.skip or line.kind == "CTX"
+        for line in resumed.view().lines
+    )
+    if finished == "hello.py":
+        assert (paths.workspace / "hello.py").read_text() == (
+            "def hello():\n    return 2\n"
+        )
+    else:
+        assert (paths.workspace / "README.md").read_text() == (
+            "# Title\n\nHello world.\n"
+        )
 
 
 def test_switch_lesson_restores_attempt(sample_repo, codeape_home):
