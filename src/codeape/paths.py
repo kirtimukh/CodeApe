@@ -28,14 +28,55 @@ def repos_root() -> Path:
     return home() / "repos"
 
 
-def sanitize_name(path: Path) -> str:
-    name = path.resolve().name
+def sanitize_name(source: str) -> str:
+    text = source.strip().rstrip("/")
+    if text.endswith(".git"):
+        text = text[:-4]
+    if "://" in text:
+        name = text.rsplit("/", 1)[-1]
+    elif text.startswith("git@"):
+        name = text.rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+    else:
+        name = Path(text).expanduser().name
     name = re.sub(r"[^\w.-]+", "-", name).strip(".-")
     return name or "repo"
 
 
+def is_git_url(source: str) -> bool:
+    text = source.strip()
+    return text.startswith(
+        ("http://", "https://", "git://", "ssh://", "file://", "git@")
+    )
+
+
+@dataclass(frozen=True)
+class RepoEntry:
+    id: int
+    name: str
+    origin: str
+
+
+@dataclass
+class Registry:
+    next_id: int
+    repos: list[RepoEntry]
+
+    def find(self, repo_id: int) -> RepoEntry | None:
+        return next((repo for repo in self.repos if repo.id == repo_id), None)
+
+    def dump(self) -> dict:
+        return {
+            "next_id": self.next_id,
+            "repos": [
+                {"id": repo.id, "name": repo.name, "origin": repo.origin}
+                for repo in self.repos
+            ],
+        }
+
+
 @dataclass(frozen=True)
 class RepoPaths:
+    id: int
     name: str
     origin: str
     root: Path
@@ -53,37 +94,60 @@ class RepoPaths:
         return self.root / "progress.json"
 
 
-def repo_paths(name: str) -> Path:
-    return repos_root() / name
+def registry_file() -> Path:
+    return home() / "repos.json"
 
 
-def active_file() -> Path:
-    return home() / "active.json"
-
-
-def read_active() -> str | None:
-    path = active_file()
+def load_registry() -> Registry:
+    path = registry_file()
     if not path.exists():
-        return None
+        return Registry(next_id=1, repos=[])
     data = json.loads(path.read_text())
-    return data.get("name")
+    return Registry(
+        next_id=int(data.get("next_id", 1)),
+        repos=[
+            RepoEntry(id=int(item["id"]), name=item["name"], origin=item["origin"])
+            for item in data.get("repos", [])
+        ],
+    )
 
 
-def write_active(name: str) -> None:
+def save_registry(registry: Registry) -> None:
     home().mkdir(parents=True, exist_ok=True)
-    active_file().write_text(json.dumps({"name": name}, indent=2) + "\n")
+    registry_file().write_text(json.dumps(registry.dump(), indent=2) + "\n")
 
 
-def load_repo_paths(name: str | None = None) -> RepoPaths:
-    chosen = name or read_active()
-    if not chosen:
-        raise SystemExit("No active repo. Run `codeape init <path>` first.")
-    root = repo_paths(chosen)
-    progress_path = root / "progress.json"
-    if not progress_path.exists():
-        raise SystemExit(f"Repo {chosen!r} is missing progress.json. Re-run init.")
-    data = json.loads(progress_path.read_text())
-    return RepoPaths(name=chosen, origin=data["origin"], root=root)
+def register_repo(name: str, origin: str) -> RepoEntry:
+    registry = load_registry()
+    entry = RepoEntry(id=registry.next_id, name=name, origin=origin)
+    registry.next_id += 1
+    registry.repos.append(entry)
+    save_registry(registry)
+    return entry
+
+
+def repo_dir(entry: RepoEntry) -> Path:
+    return repos_root() / f"{entry.id}-{entry.name}"
+
+
+def load_repo_paths(repo_id: int | None = None) -> RepoPaths:
+    registry = load_registry()
+    if not registry.repos:
+        raise SystemExit("No repos. Run `codeape init <path-or-url>` first.")
+    if repo_id is None:
+        if len(registry.repos) != 1:
+            known = ", ".join(str(repo.id) for repo in registry.repos)
+            raise SystemExit(f"Specify a repo id. Known: {known}")
+        entry = registry.repos[0]
+    else:
+        entry = registry.find(repo_id)
+        if entry is None:
+            known = ", ".join(str(repo.id) for repo in registry.repos)
+            raise SystemExit(f"Unknown repo id {repo_id}. Known: {known}")
+    root = repo_dir(entry)
+    if not (root / "progress.json").exists():
+        raise SystemExit(f"Repo {entry.id} ({entry.name}) is missing progress.json.")
+    return RepoPaths(id=entry.id, name=entry.name, origin=entry.origin, root=root)
 
 
 def is_lockfile(path: str) -> bool:

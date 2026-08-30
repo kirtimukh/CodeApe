@@ -23,17 +23,21 @@ class StatusBar(Static):
         if view.done:
             out.append("Done  ", style=pal.ADD_TYPED)
             out.append(
-                f"{view.commit_total}/{view.commit_total} commits",
+                f"{view.completed_count} done  ·  {view.skipped_count} skipped"
+                f"  ·  {view.commit_total} commits",
                 style=pal.STATUS_DIM,
             )
             return out
         short = view.sha[:7] if view.sha else ""
-        out.append("Recreating  ", style=pal.STATUS_DIM)
+        out.append("Lesson  ", style=pal.STATUS_DIM)
         out.append(f"{short}  ", style=pal.STATUS)
         out.append(view.subject or "", style=pal.ADD_UNTYPED)
+        if view.attempt_status:
+            out.append(f"  [{view.attempt_status}]", style=pal.STATUS_DIM)
         out.append("\n")
         out.append(
             f"  {view.commit_index} / {view.commit_total} commits"
+            f"  ·  {view.completed_count} done  ·  {view.skipped_count} skipped"
             f"  ·  file {view.file_index}/{view.file_total}"
             f"  ·  hunk {view.hunk_index}/{view.hunk_total}",
             style=pal.STATUS_DIM,
@@ -73,6 +77,7 @@ class CodeApeApp(App):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+s", "skip_hunk", "Skip hunk"),
         Binding("ctrl+k", "skip_commit", "Skip commit"),
+        Binding("ctrl+l", "switch_lesson", "Switch lesson"),
         Binding("ctrl+d", "accept_del", "Accept del"),
         Binding("shift+right", "next_file", "Next file", priority=True),
         Binding("shift+left", "prev_file", "Prev file", priority=True),
@@ -130,6 +135,16 @@ class CodeApeApp(App):
     def action_skip_commit(self) -> None:
         self.session.skip_commit()
         self._refresh_view()
+
+    def action_switch_lesson(self) -> None:
+        from codeape.tui.picker import LessonSwitcher
+
+        def _opened(target: str | None) -> None:
+            if target:
+                self.session.switch_lesson(target)
+                self._refresh_view()
+
+        self.push_screen(LessonSwitcher(self.session.lessons()), _opened)
 
     def action_accept_del(self) -> None:
         self.session.on_accept_del()

@@ -1,10 +1,9 @@
-import json
 from pathlib import Path
 
 from codeape.cli import cmd_init
 from codeape.history import first_parent_shas, git
 from codeape.paths import RepoPaths, load_repo_paths
-from codeape.progress import Progress
+from codeape.progress import STATUS_COMPLETED, STATUS_SKIPPED, Attempt, Progress
 from codeape.session import Session
 
 
@@ -24,8 +23,9 @@ def _current_line(session: Session):
     return next(ln for ln in session.view().lines if ln.is_current)
 
 
-def test_session_types_root_commit_and_replays(sample_repo, codeape_home):
+def test_session_types_root_then_advances(sample_repo, codeape_home):
     session, paths = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
 
     view = session.view()
     assert view.done is False
@@ -40,11 +40,12 @@ def test_session_types_root_commit_and_replays(sample_repo, codeape_home):
     _type_line(session, "return 1")
 
     assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
-    log = git(["log", "--oneline"], cwd=paths.workspace).stdout
-    assert "add hello" in log
-    assert len(Progress.load(paths.progress_file).completed_shas) == 1
+    head = git(["rev-parse", "HEAD"], cwd=paths.workspace).stdout.strip()
+    assert head == shas[0]
+    saved = Progress.load(paths.progress_file)
+    assert saved.attempts[shas[0]].status == STATUS_COMPLETED
+    assert saved.current_target == shas[1]
 
-    # Mixed +/- hunk: confirm deletion, type the new line.
     current = _current_line(session)
     assert current.kind == "DEL"
     session.on_accept_del()
@@ -52,14 +53,12 @@ def test_session_types_root_commit_and_replays(sample_repo, codeape_home):
     assert current.col == 4
     assert current.typing[current.col :].startswith("return")
     _type_line(session, "return 2")
-    # Comment-only and lockfile commits auto-complete after the mixed hunk.
     assert session.done
     assert (paths.workspace / "hello.py").read_text() == (
         "def hello():\n    # note\n    return 2\n"
     )
-    log = git(["log", "--format=%s"], cwd=paths.workspace).stdout
-    assert "change return" in log
-    assert "add comment" in log
+    head = git(["rev-parse", "HEAD"], cwd=paths.workspace).stdout.strip()
+    assert head == shas[2]
 
 
 def test_session_skips_comments_and_lockfile(sample_repo, codeape_home):
@@ -67,14 +66,17 @@ def test_session_skips_comments_and_lockfile(sample_repo, codeape_home):
     paths = load_repo_paths()
     progress = Progress.load(paths.progress_file)
     shas = first_parent_shas(sample_repo)
-    progress.completed_shas = list(shas[:2])
-    progress.current.sha = shas[2]
-    progress.current.hunk = 0
+    progress.current_target = shas[2]
+    progress.attempts = {
+        shas[0]: Attempt(parent=None, target=shas[0], status=STATUS_COMPLETED),
+        shas[1]: Attempt(parent=shas[0], target=shas[1], status=STATUS_COMPLETED),
+    }
     progress.save(paths.progress_file)
 
     session = Session(paths, progress)
     assert session.done
-    assert set(shas[:4]).issubset(set(session.progress.completed_shas))
+    assert session.progress.attempts[shas[2]].status == STATUS_COMPLETED
+    assert session.progress.attempts[shas[3]].status == STATUS_COMPLETED
 
 
 def test_tab_completes_identifier(sample_repo, codeape_home):
@@ -242,22 +244,35 @@ def test_persist_remembers_delete_remaining(sample_repo, codeape_home):
     assert restored.remaining == remaining
 
 
-def test_progress_infers_done_hunks_from_old_hunk_index(tmp_path: Path):
-    path = tmp_path / "progress.json"
-    path.write_text(
-        json.dumps(
-            {
-                "origin": "/repo",
-                "mode": "commit",
-                "first_parent_shas": ["abc"],
-                "completed_shas": [],
-                "current": {"sha": "abc", "file": "hello.py", "hunk": 3},
-            }
-        )
-    )
-    progress = Progress.load(path)
-    assert progress.current.done_hunks == [0, 1, 2]
-    assert progress.current.line == 0
-    assert progress.current.col == 0
-    assert progress.current.remaining is None
-    assert progress.current.cursors == []
+def test_skip_commit_keeps_partial_attempt(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
+    line = _current_line(session)
+    for ch in line.typing[:3]:
+        session.on_char(ch)
+    session.skip_commit()
+
+    saved = Progress.load(paths.progress_file)
+    attempt = saved.attempts[shas[0]]
+    assert attempt.status == STATUS_SKIPPED
+    assert "return 1" not in attempt.patch
+    assert "def" in attempt.patch
+    assert saved.current_target == shas[1]
+    assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
+
+
+def test_switch_lesson_restores_attempt(sample_repo, codeape_home):
+    session, paths = _open_session(sample_repo)
+    shas = first_parent_shas(sample_repo)
+    line = _current_line(session)
+    for ch in line.typing[:3]:
+        session.on_char(ch)
+    first_col = _current_line(session).col
+
+    session.switch_lesson(shas[1])
+    assert session.view().sha == shas[1]
+    assert (paths.workspace / "hello.py").read_text() == "def hello():\n    return 1\n"
+
+    session.switch_lesson(shas[0])
+    assert session.view().sha == shas[0]
+    assert _current_line(session).col == first_col

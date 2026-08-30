@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from codeape.diff_engine import Hunk
-from codeape.history import CommitMeta, git
+from codeape.history import GitError, git
 
 
 def apply_hunks(original: list[str] | None, hunks: list[Hunk]) -> list[str]:
@@ -56,25 +55,20 @@ def _prune_empty_dirs(root: Path, directory: Path) -> None:
         directory = directory.parent
 
 
-def replay_commit(workspace: Path, meta: CommitMeta) -> bool:
-    """Create a workspace commit replaying *meta*. Returns False if empty."""
+def snapshot_attempt(workspace: Path) -> str:
     git(["add", "-A"], cwd=workspace)
-    status = git(["status", "--porcelain"], cwd=workspace)
-    if not status.stdout.strip():
-        return False
-    env = os.environ.copy()
-    env["GIT_AUTHOR_DATE"] = meta.author_date
-    env["GIT_COMMITTER_DATE"] = meta.author_date
-    git(
-        [
-            "commit",
-            f"--author={meta.author_name} <{meta.author_email}>",
-            f"--date={meta.author_date}",
-            "-F",
-            "-",
-        ],
-        cwd=workspace,
-        input_text=meta.message or meta.subject,
-        env=env,
-    )
-    return True
+    return git(["diff", "--cached"], cwd=workspace).stdout
+
+
+def apply_attempt(workspace: Path, patch: str) -> None:
+    if not patch.strip():
+        return
+    try:
+        git(["apply", "--whitespace=nowarn"], cwd=workspace, input_text=patch)
+    except GitError:
+        git(
+            ["apply", "--whitespace=nowarn", "--reject"],
+            cwd=workspace,
+            input_text=patch,
+            check=False,
+        )

@@ -22,9 +22,9 @@ class TypingCanvas(Static):
         view = self.session.view()
         if view.done:
             out = Text()
-            out.append("All commits recreated.\n", style=pal.ADD_TYPED)
+            out.append("All lessons done.\n", style=pal.ADD_TYPED)
             out.append(
-                "The workspace is a git repo you typed by hand.",
+                "Each lesson was typed against its origin parent.",
                 style=pal.STATUS_DIM,
             )
             return out

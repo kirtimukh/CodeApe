@@ -4,6 +4,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+STATUS_IN_PROGRESS = "in_progress"
+STATUS_SKIPPED = "skipped"
+STATUS_COMPLETED = "completed"
+
 
 @dataclass
 class HunkCursor:
@@ -14,21 +18,18 @@ class HunkCursor:
 
 
 @dataclass
-class Current:
-    sha: str | None
-    file: str
-    hunk: int
+class Attempt:
+    parent: str | None
+    target: str
+    patch: str = ""
+    status: str = STATUS_IN_PROGRESS
+    file: str = ""
+    hunk: int = 0
     done_hunks: list[int] = field(default_factory=list)
     line: int = 0
     col: int = 0
     remaining: int | None = None
     cursors: list[HunkCursor] = field(default_factory=list)
-
-
-@dataclass
-class Skipped:
-    shas: list[str] = field(default_factory=list)
-    files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -42,21 +43,30 @@ class Stats:
 @dataclass
 class Progress:
     origin: str
-    mode: str
-    first_parent_shas: list[str]
-    completed_shas: list[str]
-    current: Current
-    skipped: Skipped = field(default_factory=Skipped)
+    current_target: str | None
+    attempts: dict[str, Attempt] = field(default_factory=dict)
     stats: Stats = field(default_factory=Stats)
 
     def dump(self) -> dict:
         return {
             "origin": self.origin,
-            "mode": self.mode,
-            "first_parent_shas": self.first_parent_shas,
-            "completed_shas": self.completed_shas,
-            "current": asdict(self.current),
-            "skipped": asdict(self.skipped),
+            "current_target": self.current_target,
+            "attempts": {
+                sha: {
+                    "parent": attempt.parent,
+                    "target": attempt.target,
+                    "patch": attempt.patch,
+                    "status": attempt.status,
+                    "file": attempt.file,
+                    "hunk": attempt.hunk,
+                    "done_hunks": attempt.done_hunks,
+                    "line": attempt.line,
+                    "col": attempt.col,
+                    "remaining": attempt.remaining,
+                    "cursors": [asdict(cursor) for cursor in attempt.cursors],
+                }
+                for sha, attempt in self.attempts.items()
+            },
             "stats": asdict(self.stats),
         }
 
@@ -66,33 +76,32 @@ class Progress:
     @classmethod
     def load(cls, path: Path) -> Progress:
         data = json.loads(path.read_text())
+        attempts = {
+            sha: _load_attempt(sha, item)
+            for sha, item in data.get("attempts", {}).items()
+        }
         return cls(
             origin=data["origin"],
-            mode=data.get("mode", "commit"),
-            first_parent_shas=list(data["first_parent_shas"]),
-            completed_shas=list(data.get("completed_shas", [])),
-            current=Current(
-                sha=data["current"].get("sha"),
-                file=data["current"].get("file", ""),
-                hunk=int(data["current"].get("hunk", 0)),
-                done_hunks=_load_done_hunks(data["current"]),
-                line=int(data["current"].get("line", 0)),
-                col=int(data["current"].get("col", 0)),
-                remaining=_load_remaining(data["current"].get("remaining")),
-                cursors=_load_cursors(data["current"]),
-            ),
-            skipped=Skipped(
-                shas=list(data.get("skipped", {}).get("shas", [])),
-                files=list(data.get("skipped", {}).get("files", [])),
-            ),
+            current_target=data.get("current_target"),
+            attempts=attempts,
             stats=Stats(**data.get("stats", {})),
         )
 
 
-def _load_done_hunks(current: dict) -> list[int]:
-    if "done_hunks" in current:
-        return [int(i) for i in current["done_hunks"]]
-    return list(range(int(current.get("hunk", 0))))
+def _load_attempt(sha: str, data: dict) -> Attempt:
+    return Attempt(
+        parent=data.get("parent"),
+        target=data.get("target", sha),
+        patch=data.get("patch", ""),
+        status=data.get("status", STATUS_IN_PROGRESS),
+        file=data.get("file", ""),
+        hunk=int(data.get("hunk", 0)),
+        done_hunks=[int(i) for i in data.get("done_hunks", [])],
+        line=int(data.get("line", 0)),
+        col=int(data.get("col", 0)),
+        remaining=_load_remaining(data.get("remaining")),
+        cursors=_load_cursors(data),
+    )
 
 
 def _load_remaining(value: object) -> int | None:
@@ -101,10 +110,9 @@ def _load_remaining(value: object) -> int | None:
     return int(value)
 
 
-def _load_cursors(current: dict) -> list[HunkCursor]:
-    raw = current.get("cursors") or []
+def _load_cursors(data: dict) -> list[HunkCursor]:
     cursors: list[HunkCursor] = []
-    for item in raw:
+    for item in data.get("cursors") or []:
         cursors.append(
             HunkCursor(
                 hunk=int(item["hunk"]),
@@ -116,15 +124,12 @@ def _load_cursors(current: dict) -> list[HunkCursor]:
     return cursors
 
 
-def new_progress(origin: str, shas: list[str]) -> Progress:
+def new_progress(origin: str, first_target: str | None) -> Progress:
+    attempts: dict[str, Attempt] = {}
+    if first_target:
+        attempts[first_target] = Attempt(parent=None, target=first_target)
     return Progress(
         origin=origin,
-        mode="commit",
-        first_parent_shas=shas,
-        completed_shas=[],
-        current=Current(
-            sha=shas[0] if shas else None,
-            file="",
-            hunk=0,
-        ),
+        current_target=first_target,
+        attempts=attempts,
     )

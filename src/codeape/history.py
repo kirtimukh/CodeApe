@@ -88,8 +88,38 @@ def clone_local(src: Path, dest: Path) -> None:
     git(["clone", "--local", str(src), str(dest)], cwd=src.parent)
 
 
-def init_workspace(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    git(["init"], cwd=path)
-    git(["config", "user.name", "CodeApe"], cwd=path)
-    git(["config", "user.email", "codeape@local"], cwd=path)
+def clone_url(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    git(["clone", url, str(dest)], cwd=dest.parent)
+
+
+def clone_workspace(mirror: Path, workspace: Path) -> None:
+    git(["clone", "--local", str(mirror), str(workspace)], cwd=mirror.parent)
+    git(["config", "user.name", "CodeApe"], cwd=workspace)
+    git(["config", "user.email", "codeape@local"], cwd=workspace)
+
+
+EMPTY_BRANCH = "codeape-empty"
+
+
+def checkout_parent(workspace: Path, parent: str | None) -> None:
+    """Reset the workspace to origin parent N, or an empty tree for the root commit."""
+    if parent is None:
+        _checkout_empty(workspace)
+        return
+    git(["checkout", "-f", parent], cwd=workspace)
+    git(["reset", "--hard", parent], cwd=workspace)
+    git(["clean", "-fd"], cwd=workspace)
+
+
+def _checkout_empty(workspace: Path) -> None:
+    exists = git(["rev-parse", "--verify", EMPTY_BRANCH], cwd=workspace, check=False)
+    if exists.returncode != 0:
+        git(["checkout", "--orphan", EMPTY_BRANCH], cwd=workspace)
+        git(["read-tree", "--empty"], cwd=workspace)
+        git(["clean", "-fd"], cwd=workspace)
+        git(["commit", "--allow-empty", "-m", "empty"], cwd=workspace)
+        return
+    git(["checkout", "-f", EMPTY_BRANCH], cwd=workspace)
+    git(["reset", "--hard", EMPTY_BRANCH], cwd=workspace)
+    git(["clean", "-fd"], cwd=workspace)
