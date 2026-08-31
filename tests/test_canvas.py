@@ -62,6 +62,9 @@ class _FakeSession:
         self.total = total
         self.done = False
 
+    def target_source(self) -> str:
+        return "\n".join(f"line {i}" for i in range(self.total))
+
     def view(self) -> ViewState:
         return ViewState(
             done=False,
@@ -141,6 +144,73 @@ def test_canvas_follows_after_bump():
             assert canvas.scroll_offset.y > 0
 
     asyncio.run(_run())
+
+
+def test_hunk_text_highlights_matching_words():
+    session = _FakeSession(current=0, total=2)
+    canvas = TypingCanvas(session)
+    canvas.highlight_term = "line"
+    text, _ = canvas._hunk_text(80)
+    assert text.plain.count("line") == 2
+    highlighted = [
+        text.plain[start:end]
+        for start, end, style in text.spans
+        if "45475a" in str(style)
+    ]
+    assert highlighted == ["line", "line"]
+
+
+def test_select_at_sets_identifier_and_file_count():
+    session = _FakeSession(current=0, total=3)
+    canvas = TypingCanvas(session)
+    canvas.select_at(2, 0)
+    assert canvas.highlight_term == "line"
+    assert canvas.highlight_count == 3
+
+
+def test_double_click_highlights_identifier():
+    session = _FakeSession(current=0, total=3)
+
+    async def _run() -> None:
+        app = _CanvasApp(session)
+        async with app.run_test(size=(80, 12)) as pilot:
+            canvas = app.query_one(TypingCanvas)
+            await pilot.pause()
+            await pilot.click("#body", offset=(2, 0), times=2)
+            await pilot.pause()
+            assert canvas.highlight_term == "line"
+            assert canvas.highlight_count == 3
+
+    asyncio.run(_run())
+
+
+def test_set_highlight_does_not_follow_cursor():
+    session = _FakeSession(current=0, total=40)
+
+    async def _run() -> None:
+        app = _CanvasApp(session)
+        async with app.run_test(size=(80, 12)) as pilot:
+            canvas = app.query_one(TypingCanvas)
+            await pilot.pause()
+            canvas.scroll_to(y=20, animate=False, immediate=True)
+            await pilot.pause()
+            scrolled = canvas.scroll_offset.y
+            assert scrolled > 0
+            canvas.set_highlight("line")
+            await pilot.pause()
+            assert canvas.highlight_term == "line"
+            assert canvas.scroll_offset.y == scrolled
+
+    asyncio.run(_run())
+
+
+def test_select_at_clears_when_not_an_identifier():
+    session = _FakeSession(current=0, total=3)
+    canvas = TypingCanvas(session)
+    canvas.highlight_term = "line"
+    canvas.select_at(0, 0)
+    assert canvas.highlight_term == ""
+    assert canvas.highlight_count == 0
 
 
 def test_canvas_follows_after_resize():

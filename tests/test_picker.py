@@ -5,6 +5,7 @@ from textual.widgets import Static
 
 from codeape.session import LessonRow, ViewLine, ViewState
 from codeape.tui.app import CodeApeApp
+from codeape.tui.canvas import TypingCanvas
 from codeape.tui.picker import LessonSwitcher
 
 
@@ -111,6 +112,27 @@ class _PickerSession:
             misses=0,
             chars_assisted=0,
         )
+
+
+def test_escape_closes_lesson_switcher_while_highlight_is_set():
+    session = _PickerSession()
+
+    async def _run() -> None:
+        app = CodeApeApp(session)
+        async with app.run_test() as pilot:
+            canvas = app.query_one(TypingCanvas)
+            canvas.set_highlight("x")
+            await pilot.pause()
+            app.action_switch_lesson()
+            await pilot.pause()
+            assert app.screen.is_modal
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not app.screen.is_modal
+            assert canvas.highlight_term == "x"
+            assert session.switched == ""
+
+    asyncio.run(_run())
 
 
 def test_codeape_app_picker_down_does_not_move_hunk():

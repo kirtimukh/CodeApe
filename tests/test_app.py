@@ -2,6 +2,7 @@ import asyncio
 
 from codeape.session import ViewLine, ViewState
 from codeape.tui.app import CodeApeApp, StatusBar
+from codeape.tui.canvas import TypingCanvas
 
 
 def _view_line() -> ViewLine:
@@ -23,6 +24,9 @@ class _FakeSession:
     def __init__(self, files: list[str]) -> None:
         self.files = files
         self.done = False
+
+    def target_source(self) -> str:
+        return "x = 1\nx = 2"
 
     def view(self) -> ViewState:
         current = self.files[0] if self.files else ""
@@ -72,6 +76,56 @@ def test_status_grows_when_filenames_need_another_line():
             app._refresh_view()
             await pilot.pause()
             assert status.size.height > short_h
+
+    asyncio.run(_run())
+
+
+def test_status_shows_highlight_count():
+    session = _FakeSession(["a.py"])
+
+    async def _run() -> None:
+        app = CodeApeApp(session)
+        async with app.run_test(size=(60, 20)) as pilot:
+            canvas = app.query_one(TypingCanvas)
+            canvas.set_highlight("x")
+            await pilot.pause()
+            rendered = app.query_one(StatusBar).render()
+            assert "x × 2" in rendered.plain
+
+    asyncio.run(_run())
+
+
+def test_escape_clears_highlight():
+    session = _FakeSession(["a.py"])
+
+    async def _run() -> None:
+        app = CodeApeApp(session)
+        async with app.run_test(size=(60, 20)) as pilot:
+            canvas = app.query_one(TypingCanvas)
+            canvas.set_highlight("x")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert canvas.highlight_term == ""
+            assert "×" not in app.query_one(StatusBar).render().plain
+
+    asyncio.run(_run())
+
+
+def test_escape_leaves_highlight_when_command_palette_is_open():
+    session = _FakeSession(["a.py"])
+
+    async def _run() -> None:
+        app = CodeApeApp(session)
+        async with app.run_test(size=(60, 20)) as pilot:
+            canvas = app.query_one(TypingCanvas)
+            canvas.set_highlight("x")
+            await pilot.pause()
+            app.action_command_palette()
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert canvas.highlight_term == "x"
 
     asyncio.run(_run())
 

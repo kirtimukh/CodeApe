@@ -54,6 +54,12 @@ class StatusBar(Static):
             f"  tab {view.chars_assisted}",
             style=pal.STATUS_DIM,
         )
+        canvas = self.app.query(TypingCanvas)
+        if canvas:
+            term = canvas.first().highlight_term
+            count = canvas.first().highlight_count
+            if term:
+                out.append(f"    {term} × {count}", style=pal.STATUS)
         return out
 
 
@@ -85,6 +91,7 @@ class CodeApeApp(App):
         Binding("down", "line_down", "Down", show=False, priority=True),
         Binding("tab", "tab", "Tab", show=False, priority=True),
         Binding("shift+tab", "line_tab", "Line tab", show=False, priority=True),
+        Binding("escape", "clear_highlight", "Clear highlight", show=False),
     ]
     _BOUND_KEYS = {binding.key for binding in BINDINGS}
 
@@ -145,10 +152,18 @@ class CodeApeApp(App):
 
         def _opened(target: str | None) -> None:
             if target:
+                self.query_one(TypingCanvas).clear_highlight()
                 self.session.switch_lesson(target)
                 self._refresh_view()
 
         self.push_screen(LessonSwitcher(self.session.lessons()), _opened)
+
+    def action_clear_highlight(self) -> None:
+        if self.screen.is_modal:
+            return
+        canvas = self.query_one(TypingCanvas)
+        if canvas.highlight_term:
+            canvas.clear_highlight()
 
     def action_accept_del(self) -> None:
         self.session.on_accept_del()

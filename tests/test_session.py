@@ -88,6 +88,14 @@ def test_session_types_comments_and_skips_lockfile(sample_repo, codeape_home):
     assert session.progress.attempts[shas[3]].status == STATUS_COMPLETED
 
 
+def test_target_source_is_file_at_target_commit(sample_repo, codeape_home):
+    session, _ = _open_session(sample_repo)
+    assert session.target_source() == "def hello():\n    return 1"
+    shas = first_parent_shas(sample_repo)
+    session.switch_lesson(shas[1])
+    assert session.target_source() == "def hello():\n    return 2"
+
+
 def test_tab_completes_identifier(sample_repo, codeape_home):
     session, _ = _open_session(sample_repo)
     session.on_tab()

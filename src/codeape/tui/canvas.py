@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from rich.console import Console
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.events import Resize
+from textual.events import Click, Resize
 from textual.widgets import Static
 
 from codeape.session import Session, ViewLine
 from codeape.tui import palette as pal
+from codeape.tui.highlight import (
+    apply_highlight,
+    identifier_at_cell,
+    line_visual_height,
+    match_count,
+)
 
 LOOKAHEAD_ROWS = 3
 PIN_RATIO = 2 / 3
-_MEASURE = Console(width=120, legacy_windows=False, force_terminal=True)
 
 
 def target_scroll_y(
@@ -49,17 +53,22 @@ def target_scroll_y(
     return None if target == scroll_y else target
 
 
-def line_visual_height(plain: str, width: int) -> int:
-    """Visual rows of a hunk line at ``width``, matching Textual's Text wrap."""
-    if width <= 0:
-        return 1
-    wrapped = Text(plain).wrap(_MEASURE, width, tab_size=8)
-    return max(1, len(wrapped))
+class CanvasBody(Static):
+    ALLOW_SELECT = False
+
+    def on_click(self, event: Click) -> None:
+        if event.chain != 2:
+            return
+        event.stop()
+        parent = self.parent
+        if isinstance(parent, TypingCanvas):
+            parent.select_at(event.x, event.y)
 
 
 class TypingCanvas(VerticalScroll):
     """Hunk view: the body grows with the hunk; this widget scrolls and follows."""
 
+    ALLOW_SELECT = False
     DEFAULT_CSS = """
     TypingCanvas {
         height: 1fr;
@@ -78,9 +87,11 @@ class TypingCanvas(VerticalScroll):
     def __init__(self, session: Session, **kwargs) -> None:
         super().__init__(**kwargs)
         self.session = session
+        self.highlight_term = ""
+        self.highlight_count = 0
 
     def compose(self) -> ComposeResult:
-        yield Static(id="body")
+        yield CanvasBody(id="body")
 
     def on_mount(self) -> None:
         self._paint()
@@ -90,12 +101,38 @@ class TypingCanvas(VerticalScroll):
         self.call_after_refresh(self._follow_cursor)
 
     def bump(self) -> None:
+        self._refresh_count()
         self._paint()
 
-    def _paint(self) -> None:
+    def clear_highlight(self) -> None:
+        self.set_highlight("")
+
+    def set_highlight(self, term: str) -> None:
+        self.highlight_term = term
+        self._refresh_count()
+        if self.is_attached:
+            self._paint(follow=False)
+            status = self.screen.query("#status")
+            if status:
+                status.first().refresh(layout=True)
+
+    def select_at(self, x: int, y: int) -> None:
+        self.set_highlight(
+            identifier_at_cell(self.session.view().lines, self._wrap_width(), x, y)
+        )
+
+    def _refresh_count(self) -> None:
+        source = ""
+        getter = getattr(self.session, "target_source", None)
+        if callable(getter):
+            source = getter()
+        self.highlight_count = match_count(source, self.highlight_term)
+
+    def _paint(self, *, follow: bool = True) -> None:
         text, _span = self._hunk_text(self._wrap_width())
-        self.query_one("#body", Static).update(text)
-        self.call_after_refresh(self._follow_cursor)
+        self.query_one("#body", CanvasBody).update(text)
+        if follow:
+            self.call_after_refresh(self._follow_cursor)
 
     def _follow_cursor(self) -> None:
         width = self._wrap_width()
@@ -140,6 +177,7 @@ class TypingCanvas(VerticalScroll):
             y += height
             out.append_text(row)
             out.append("\n")
+        apply_highlight(out, self.highlight_term)
         return out, span
 
     def _gutter_style(self, line: ViewLine) -> str:

@@ -948,3 +948,15 @@ class Session:
             misses=misses,
             chars_assisted=self.progress.stats.chars_assisted,
         )
+
+    def target_source(self, path: str | None = None) -> str:
+        """Current file contents at the target commit, or empty."""
+        if self.done or self.progress.current_target is None:
+            return ""
+        path = self._att.file if path is None else path
+        if not path:
+            return ""
+        hunks = [hunk for hunk in self._hunks if hunk.path == path]
+        if not hunks or hunks[-1].is_removed_file:
+            return ""
+        return "\n".join(apply_hunks(self._parent_files.get(path), hunks))
