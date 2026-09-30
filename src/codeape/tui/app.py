@@ -64,19 +64,15 @@ class StatusBar(Static):
 
 
 class CodeApeApp(App):
-    CSS = f"""
-    Screen {{
-        background: {pal.BACKGROUND};
-        color: {pal.ADD_TYPED};
-    }}
-    #status {{
+    CSS = """
+    #status {
         padding: 1 2 0 2;
         height: auto;
-    }}
-    #canvas {{
+    }
+    #canvas {
         padding: 1 2;
         height: 1fr;
-    }}
+    }
     """
 
     BINDINGS = [
@@ -98,6 +94,9 @@ class CodeApeApp(App):
     def __init__(self, session: Session) -> None:
         super().__init__()
         self.session = session
+
+    def on_mount(self) -> None:
+        pal.apply_app(self)
 
     def compose(self) -> ComposeResult:
         with Vertical():

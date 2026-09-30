@@ -39,6 +39,12 @@ def main(argv: list[str] | None = None) -> None:
     init_p.add_argument("source", help="Local git path or remote URL")
     start_p = sub.add_parser("start", help="Open the repo picker or a repo by id")
     start_p.add_argument("repo_id", nargs="?", type=int, help="Stable repo id")
+    start_p.add_argument(
+        "--theme",
+        choices=("dark", "light", "auto"),
+        default=None,
+        help="TUI colors: dark, light, or auto from the terminal (env: CODEAPE_THEME)",
+    )
     status_p = sub.add_parser("status", help="Show registered repos or one repo")
     status_p.add_argument("repo_id", nargs="?", type=int, help="Stable repo id")
     args = parser.parse_args(argv)
@@ -46,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.cmd == "init":
             cmd_init(args.source)
         elif args.cmd == "start":
-            cmd_start(args.repo_id)
+            cmd_start(args.repo_id, theme=args.theme)
         elif args.cmd == "status":
             cmd_status(args.repo_id)
     except GitError as exc:
@@ -116,10 +122,13 @@ def _run_session(paths: RepoPaths) -> None:
     session.persist()
 
 
-def cmd_start(repo_id: int | None = None) -> None:
+def cmd_start(repo_id: int | None = None, theme: str | None = None) -> None:
     registry = load_registry()
     if not registry.repos:
         raise SystemExit("No repos. Run `codeape init <path-or-url>` first.")
+    from codeape.tui import palette as pal
+
+    pal.use(pal.resolve(theme))
     if repo_id is not None:
         _run_session(load_repo_paths(repo_id))
         return

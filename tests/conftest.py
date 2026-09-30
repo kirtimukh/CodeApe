@@ -7,6 +7,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_palette() -> None:
+    from codeape.tui import palette as pal
+
+    pal.use("dark")
+    yield
+    pal.use("dark")
+
+
 def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Test")

@@ -46,17 +46,13 @@ def _repo_label(entry: RepoEntry) -> str:
 
 
 class RepoPickerApp(App[int | None]):
-    CSS = f"""
-    Screen {{
-        background: {pal.BACKGROUND};
-        color: {pal.ADD_TYPED};
-    }}
-    #title {{
+    CSS = """
+    #title {
         padding: 1 2 0 2;
-    }}
-    #repos {{
+    }
+    #repos {
         padding: 1 2;
-    }}
+    }
     """
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -66,6 +62,9 @@ class RepoPickerApp(App[int | None]):
     def __init__(self, repos: list[RepoEntry]) -> None:
         super().__init__()
         self.repos = repos
+
+    def on_mount(self) -> None:
+        pal.apply_app(self)
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -84,19 +83,16 @@ class RepoPickerApp(App[int | None]):
 
 
 class LessonSwitcher(ModalScreen[str | None]):
-    CSS = f"""
-    LessonSwitcher {{
+    CSS = """
+    LessonSwitcher {
         align: center middle;
-    }}
-    #lesson-box {{
+    }
+    #lesson-box {
         width: 80%;
         height: auto;
         max-height: 80%;
-        background: {pal.BACKGROUND};
-        color: {pal.ADD_TYPED};
         padding: 1 2;
-        border: solid {pal.STATUS};
-    }}
+    }
     """
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -119,6 +115,7 @@ class LessonSwitcher(ModalScreen[str | None]):
             yield OptionList(id="lessons")
 
     def on_mount(self) -> None:
+        pal.apply_colors(self.query_one("#lesson-box"), border=True)
         self._render_page()
 
     def _render_page(self) -> None:
